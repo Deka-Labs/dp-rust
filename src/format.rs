@@ -3,10 +3,27 @@ use core::{
     fmt::{write, Arguments, Error, Write},
 };
 
+use chrono::prelude::*;
+
 pub fn format_string<'s>(buffer: &'s mut [u8], args: Arguments) -> Result<&'s str, Error> {
     let mut w = FormatBuffer::new(buffer);
     write(&mut w, args)?;
     w.as_str().ok_or(Error)
+}
+
+pub fn format_time<'s, TZ: TimeZone>(
+    buffer: &'s mut [u8],
+    time: &DateTime<TZ>,
+) -> Result<&'s str, Error> {
+    format_string(
+        buffer,
+        format_args!(
+            "{:02}:{:02}:{:02}",
+            time.hour(),
+            time.minute(),
+            time.second()
+        ),
+    )
 }
 
 struct FormatBuffer<'s> {
