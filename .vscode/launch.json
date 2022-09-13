@@ -19,7 +19,7 @@
             "configFiles": [
                 "${workspaceRoot}/openocd.cfg"
             ],
-            "svdFile": "${workspaceRoot}/.vscode/STM32F411.svd",
+            "svdFile": "${workspaceRoot}/.vscode/STM32F411.svd"
         }
     ]
 }
