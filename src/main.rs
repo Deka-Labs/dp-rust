@@ -1,6 +1,13 @@
 #![no_std]
 #![no_main]
 
+extern crate chrono;
+/// HAL library for our device
+extern crate stm32f4xx_hal as hal;
+
+/// Peripheral Access Crate for our device
+pub use hal::pac;
+
 /// Mod for formatting strings
 mod format;
 
@@ -16,24 +23,42 @@ mod ds3231;
 /// SSD1306 driver
 mod ssd1306;
 
-use chrono::prelude::*;
-/// Peripheral Access Crate for our device
-pub use stm32f4xx_hal::pac;
+/// Joystick driver
+mod joystick;
 
-/// HAL library for our device
-pub use stm32f4xx_hal as hal;
+use chrono::prelude::*;
 
 use panic_halt as _;
+
+#[repr(u8)]
+#[derive(Clone, Debug, Default)]
+pub enum RTCField {
+    #[default]
+    Hours = 0,
+    Minutes,
+}
+
+impl RTCField {
+    pub fn next(&mut self) {
+        use RTCField::*;
+        *self = match self {
+            Hours => Minutes,
+            Minutes => Hours,
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct DisplayInfo {
     datetime: DateTime<Utc>,
     temperature: f32,
+
+    edit_field: RTCField,
 }
 
 unsafe impl Sync for DisplayInfo {}
 
-#[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6])]
+#[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5])]
 mod app {
 
     use chrono::Duration;
@@ -44,24 +69,33 @@ mod app {
     use embedded_graphics::prelude::*;
     use embedded_graphics::text::Text;
 
-    use crate::ds3231::DS3231;
     use crate::format::format_time;
-    use crate::hal::gpio::{OpenDrain, Output, PushPull, AF4, PA5, PA8, PB8, PB9};
+    use crate::hal::gpio::*;
     use crate::hal::prelude::*;
     use crate::hal::timer::MonoTimerUs;
-    use crate::DisplayInfo;
 
     use crate::pac::I2C1;
 
+    use crate::ds3231::DS3231;
     use crate::format::format_string;
     use crate::i2c::I2c;
+    use crate::joystick::*;
     use crate::lm75b::LM75B;
     use crate::ssd1306::SSD1306;
+    use crate::DisplayInfo;
+    use crate::RTCField;
 
     #[shared]
     struct Shared {
         bus: I2c<I2C1, (PB8<AF4<OpenDrain>>, PB9<AF4<OpenDrain>>)>,
         display_info: DisplayInfo,
+        joy: AccessoryShieldJoystick<
+            ButtonPullUp<Pin<'A', 1>>,
+            ButtonPullUp<Pin<'C', 0>>,
+            ButtonPullUp<Pin<'B', 0>>,
+            ButtonPullUp<Pin<'A', 4>>,
+            ButtonPullUp<Pin<'C', 1>>,
+        >,
     }
 
     #[local]
@@ -78,7 +112,7 @@ mod app {
     #[init]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
-        let dp = ctx.device;
+        let mut dp = ctx.device;
 
         let rcc = dp.RCC.constrain();
         let clocks = rcc.cfgr.use_hse(8.MHz()).sysclk(100.MHz()).freeze();
@@ -112,16 +146,32 @@ mod app {
         let di = DisplayInfo {
             temperature: 0.0_f32, // Will update in grab_temperature task
             datetime: rtc.time().clone(),
+            edit_field: RTCField::Hours,
         };
+
+        // Configure buttons
+        let exti = &mut dp.EXTI;
+        let syscfg = &mut dp.SYSCFG.constrain();
+        let gpioc = dp.GPIOC.split();
+
+        let up = ButtonPullUp::new(gpioa.pa1.into_pull_up_input(), exti, syscfg);
+        let down = ButtonPullUp::new(gpioc.pc0.into_pull_up_input(), exti, syscfg);
+        let left = ButtonPullUp::new(gpiob.pb0.into_pull_up_input(), exti, syscfg);
+        let right = ButtonPullUp::new(gpioa.pa4.into_pull_up_input(), exti, syscfg);
+        let center = ButtonPullUp::new(gpioc.pc1.into_pull_up_input(), exti, syscfg);
+
+        let joy = AccessoryShieldJoystick::new(up, down, left, right, center);
 
         // Spawn repeating tasks
         tick::spawn().unwrap();
         grab_temperature::spawn().unwrap();
+        handle_input::spawn().unwrap();
 
         (
             Shared {
                 bus: i2c,
                 display_info: di,
+                joy,
             },
             Local {
                 led,
@@ -133,9 +183,10 @@ mod app {
         )
     }
 
-    #[idle(local = [ ], shared = [bus])]
+    #[idle(local = [ ], shared = [])]
     fn idle(_ctx: idle::Context) -> ! {
         loop {
+            // Draw when not busy!
             draw::spawn().ok();
         }
     }
@@ -162,7 +213,46 @@ mod app {
         di.lock(|i| i.temperature = temp);
     }
 
-    #[task(local = [display], shared = [bus, display_info])]
+    #[task(local = [speed: i64 = 1, prev_pressed: bool = false], shared = [display_info, joy])]
+    fn handle_input(mut ctx: handle_input::Context) {
+        let speed = ctx.local.speed;
+        let prev_pressed = ctx.local.prev_pressed;
+
+        let di = &mut ctx.shared.display_info;
+
+        ctx.shared.joy.lock(|j| {
+            if j.up.pressed() {
+                di.lock(|i| match &i.edit_field {
+                    RTCField::Hours => i.datetime = i.datetime + Duration::hours(*speed),
+                    RTCField::Minutes => i.datetime = i.datetime + Duration::minutes(*speed),
+                });
+            }
+
+            if j.down.pressed() {
+                di.lock(|i| match &i.edit_field {
+                    RTCField::Hours => i.datetime = i.datetime - Duration::hours(*speed),
+                    RTCField::Minutes => i.datetime = i.datetime - Duration::minutes(*speed),
+                });
+            }
+
+            if j.right.pressed() {
+                di.lock(|i| i.edit_field.next());
+            }
+
+            // Apply acceleration
+            let pressed = j.up.pressed() || j.down.pressed();
+            match (pressed, *prev_pressed) {
+                (false, true) => *speed = 1, // Reset speed when unpressed
+                (true, true) => *speed += 1, // If holding button -> accelerate
+                _ => {}                      // Do nothing
+            }
+            *prev_pressed = pressed;
+        });
+
+        handle_input::spawn_after(100.millis()).unwrap();
+    }
+
+    #[task(local = [display], shared = [bus, display_info], priority = 2)]
     fn draw(mut ctx: draw::Context) {
         // Styles
         let text_style = MonoTextStyleBuilder::new()
