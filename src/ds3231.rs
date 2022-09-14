@@ -3,6 +3,7 @@ use chrono::prelude::*;
 use crate::i2c::BlockingI2C;
 
 const I2C_ADDRESS: u8 = 0b01101000;
+const REGISTER_COUNT: usize = 7;
 
 #[repr(u8)]
 pub enum Register {
@@ -50,12 +51,31 @@ impl DS3231 {
         Ok(())
     }
 
+    pub fn set_time<B: BlockingI2C>(
+        &mut self,
+        bus: &mut B,
+        time: DateTime<Utc>,
+    ) -> Result<(), Error> {
+        let mut data = [0_u8; REGISTER_COUNT];
+        data[Register::Seconds as usize] = Self::decimal_to_bcd(time.second() as u8);
+        data[Register::Minutes as usize] = Self::decimal_to_bcd(time.minute() as u8);
+        // Store in 24H format
+        data[Register::Hours as usize] = Self::decimal_to_bcd(time.hour() as u8);
+
+        self.write_registers(bus, data)?;
+
+        Ok(())
+    }
+
     pub fn time(&self) -> &DateTime<Utc> {
         &self.time
     }
 
-    fn read_registers<B: BlockingI2C>(&mut self, bus: &mut B) -> Result<[u8; 7], Error> {
-        let mut buf = [0_u8; 7];
+    fn read_registers<B: BlockingI2C>(
+        &mut self,
+        bus: &mut B,
+    ) -> Result<[u8; REGISTER_COUNT], Error> {
+        let mut buf = [0_u8; REGISTER_COUNT];
         if let Err(_) = bus.write_read(I2C_ADDRESS, &[0], &mut buf) {
             return Err(Error::I2CError);
         }
@@ -63,8 +83,26 @@ impl DS3231 {
         Ok(buf)
     }
 
+    fn write_registers<B: BlockingI2C>(
+        &mut self,
+        bus: &mut B,
+        regs: [u8; REGISTER_COUNT],
+    ) -> Result<(), Error> {
+        let mut buf = [0_u8; REGISTER_COUNT + 1];
+        buf[1..].copy_from_slice(&regs);
+        if let Err(_) = bus.write(I2C_ADDRESS, &buf) {
+            return Err(Error::I2CError);
+        }
+
+        Ok(())
+    }
+
     fn bcd_to_decimal(bcd: u8) -> u8 {
         ((bcd & 0b11110000) >> 4) * 10 + (bcd & 0b00001111)
+    }
+
+    fn decimal_to_bcd(d: u8) -> u8 {
+        (d / 10 << 4) | d % 10
     }
 
     fn hours_to_decimal(bcd: u8) -> u8 {

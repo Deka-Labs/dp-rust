@@ -31,7 +31,7 @@ use chrono::prelude::*;
 use panic_halt as _;
 
 #[repr(u8)]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum RTCField {
     #[default]
     Hours = 0,
@@ -40,6 +40,14 @@ pub enum RTCField {
 
 impl RTCField {
     pub fn next(&mut self) {
+        use RTCField::*;
+        *self = match self {
+            Hours => Minutes,
+            Minutes => Hours,
+        }
+    }
+
+    pub fn prev(&mut self) {
         use RTCField::*;
         *self = match self {
             Hours => Minutes,
@@ -58,15 +66,19 @@ pub struct DisplayInfo {
 
 unsafe impl Sync for DisplayInfo {}
 
-#[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5])]
+#[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4])]
 mod app {
 
+    use chrono::prelude::*;
     use chrono::Duration;
 
+    use chrono::Utc;
     use embedded_graphics::mono_font::ascii::FONT_9X15;
     use embedded_graphics::mono_font::MonoTextStyleBuilder;
     use embedded_graphics::pixelcolor::BinaryColor;
     use embedded_graphics::prelude::*;
+    use embedded_graphics::primitives::Line;
+    use embedded_graphics::primitives::PrimitiveStyleBuilder;
     use embedded_graphics::text::Text;
 
     use crate::format::format_time;
@@ -109,6 +121,13 @@ mod app {
     #[monotonic(binds = TIM5, default = true)]
     type MicrosecMono = MonoTimerUs<crate::pac::TIM5>;
 
+    /// Init function running on reset
+    ///
+    /// * Configures clocks to 100 MHz
+    /// * Configures PA5(User LED) for tick indication
+    /// * Creates I2C bus, display, temperature sensor, RTC
+    /// * Configures joystick
+    /// * Starts repeating tasks
     #[init]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
@@ -183,7 +202,9 @@ mod app {
         )
     }
 
-    #[idle(local = [ ], shared = [])]
+    /// Idle function runs when nothing to do
+    /// Used for call draw task
+    #[idle(local = [], shared = [])]
     fn idle(_ctx: idle::Context) -> ! {
         loop {
             // Draw when not busy!
@@ -191,7 +212,8 @@ mod app {
         }
     }
 
-    #[task(local = [led], shared=[display_info])]
+    /// tick is top-priority task. It updates clock without sync with real RTC module
+    #[task(local = [led], shared=[display_info], priority = 5)]
     fn tick(ctx: tick::Context) {
         tick::spawn_after(1000.millis()).unwrap();
         ctx.local.led.toggle();
@@ -201,7 +223,17 @@ mod app {
         di.lock(|i| i.datetime = i.datetime + Duration::seconds(1))
     }
 
-    #[task(local=[temp_probe], shared=[bus, display_info])]
+    /// Send new time to RTC
+    #[task(local = [rtc], shared = [bus], priority = 3)]
+    fn send_time_to_rtc(mut ctx: send_time_to_rtc::Context, time: DateTime<Utc>) {
+        let rtc = ctx.local.rtc;
+        ctx.shared.bus.lock(|bus| {
+            rtc.set_time(bus, time).expect("Failed to send time");
+        });
+    }
+
+    /// The task gets temperature reading from thermometer
+    #[task(local=[temp_probe], shared=[bus, display_info], priority = 3)]
     fn grab_temperature(mut ctx: grab_temperature::Context) {
         // LM75B updates temperature reading each 100 ms
         grab_temperature::spawn_after(100.millis()).unwrap();
@@ -213,8 +245,11 @@ mod app {
         di.lock(|i| i.temperature = temp);
     }
 
+    /// handle_input handles joystick
     #[task(local = [speed: i64 = 1, prev_pressed: bool = false], shared = [display_info, joy])]
     fn handle_input(mut ctx: handle_input::Context) {
+        const MAX_SPEED: i64 = 5;
+
         let speed = ctx.local.speed;
         let prev_pressed = ctx.local.prev_pressed;
 
@@ -239,12 +274,22 @@ mod app {
                 di.lock(|i| i.edit_field.next());
             }
 
-            // Apply acceleration
+            if j.left.pressed() {
+                di.lock(|i| i.edit_field.prev());
+            }
+
+            // Apply acceleration and save changes
             let pressed = j.up.pressed() || j.down.pressed();
             match (pressed, *prev_pressed) {
-                (false, true) => *speed = 1, // Reset speed when unpressed
-                (true, true) => *speed += 1, // If holding button -> accelerate
-                _ => {}                      // Do nothing
+                (false, true) => {
+                    // Reset speed when unpressed and set time in RTC with 0 seconds
+                    *speed = 1;
+
+                    di.lock(|s| s.datetime = s.datetime.with_second(0).unwrap());
+                    send_time_to_rtc::spawn(di.lock(|s| s.datetime.clone())).unwrap();
+                }
+                (true, true) if *speed < MAX_SPEED => *speed += 1, // If holding button -> accelerate
+                _ => {}                                            // Do nothing
             }
             *prev_pressed = pressed;
         });
@@ -252,12 +297,18 @@ mod app {
         handle_input::spawn_after(100.millis()).unwrap();
     }
 
-    #[task(local = [display], shared = [bus, display_info], priority = 2)]
+    /// Draw task draws content of `display_info` onto screen
+    #[task(local = [display], shared = [bus, display_info], priority = 1, capacity = 1)]
     fn draw(mut ctx: draw::Context) {
         // Styles
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_9X15)
             .text_color(BinaryColor::On)
+            .build();
+
+        let line_style = PrimitiveStyleBuilder::new()
+            .stroke_width(1)
+            .stroke_color(BinaryColor::On)
             .build();
 
         // Clear display content
@@ -280,6 +331,24 @@ mod app {
             embedded_graphics::text::Alignment::Center,
         );
         text.draw(display).unwrap();
+        // Draw selected to edit line
+        {
+            let y = 15;
+            let width = 16;
+            let start_hours = 31;
+            let start_min = 57;
+            let (p1, p2) = match di.lock(|i| i.edit_field.clone()) {
+                RTCField::Hours => (
+                    Point::new(start_hours, y),
+                    Point::new(start_hours + width, y),
+                ),
+                RTCField::Minutes => (Point::new(start_min, y), Point::new(start_min + width, y)),
+            };
+            Line::new(p1, p2)
+                .into_styled(line_style)
+                .draw(display)
+                .unwrap();
+        }
 
         // Draw temperature
         str_buf.fill(0);
