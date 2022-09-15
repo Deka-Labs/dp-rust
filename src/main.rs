@@ -73,12 +73,14 @@ mod app {
     use chrono::Duration;
 
     use chrono::Utc;
-    use embedded_graphics::mono_font::ascii::FONT_9X15;
+    use embedded_graphics::mono_font::ascii::FONT_10X20;
     use embedded_graphics::mono_font::MonoTextStyleBuilder;
     use embedded_graphics::pixelcolor::BinaryColor;
     use embedded_graphics::prelude::*;
+    use embedded_graphics::primitives::Circle;
     use embedded_graphics::primitives::Line;
     use embedded_graphics::primitives::PrimitiveStyleBuilder;
+    use embedded_graphics::primitives::Triangle;
     use embedded_graphics::text::Text;
 
     use crate::format::format_time;
@@ -302,7 +304,7 @@ mod app {
     fn draw(mut ctx: draw::Context) {
         // Styles
         let text_style = MonoTextStyleBuilder::new()
-            .font(&FONT_9X15)
+            .font(&FONT_10X20)
             .text_color(BinaryColor::On)
             .build();
 
@@ -326,46 +328,57 @@ mod app {
 
         let text = Text::with_alignment(
             time_str,
-            Point { x: 64, y: 12 },
+            Point { x: 64, y: 32 },
             text_style.clone(),
             embedded_graphics::text::Alignment::Center,
         );
         text.draw(display).unwrap();
         // Draw selected to edit line
         {
-            let y = 15;
-            let width = 16;
-            let start_hours = 31;
-            let start_min = 57;
-            let (p1, p2) = match di.lock(|i| i.edit_field.clone()) {
-                RTCField::Hours => (
-                    Point::new(start_hours, y),
-                    Point::new(start_hours + width, y),
-                ),
-                RTCField::Minutes => (Point::new(start_min, y), Point::new(start_min + width, y)),
+            let y = 14;
+            let height = 10;
+            let width = 6;
+            let pos_hours = 33;
+            let pos_min = 64;
+
+            let p1 = match di.lock(|i| i.edit_field.clone()) {
+                RTCField::Hours => Point::new(pos_hours, y),
+                RTCField::Minutes => Point::new(pos_min, y),
             };
-            Line::new(p1, p2)
+
+            Triangle::new(
+                p1,
+                p1 + Point::new(-width / 2, -height),
+                p1 + Point::new(width / 2, -height),
+            )
+            .into_styled(line_style)
+            .draw(display)
+            .unwrap();
+        }
+
+        // Draw temperature
+        {
+            str_buf.fill(0);
+            let temp_str = di.lock(|display_info| {
+                format_string(
+                    &mut str_buf,
+                    format_args!("{:.1} C", display_info.temperature),
+                )
+                .unwrap()
+            });
+            let text = Text::with_alignment(
+                temp_str,
+                Point { x: 64, y: 60 },
+                text_style.clone(),
+                embedded_graphics::text::Alignment::Center,
+            );
+            text.draw(display).unwrap();
+
+            Circle::with_center(Point::new(82, 47), 4)
                 .into_styled(line_style)
                 .draw(display)
                 .unwrap();
         }
-
-        // Draw temperature
-        str_buf.fill(0);
-        let temp_str = di.lock(|display_info| {
-            format_string(
-                &mut str_buf,
-                format_args!("Temp: {:.1}", display_info.temperature),
-            )
-            .unwrap()
-        });
-        let text = Text::with_alignment(
-            temp_str,
-            Point { x: 64, y: 32 },
-            text_style.clone(),
-            embedded_graphics::text::Alignment::Center,
-        );
-        text.draw(display).unwrap();
 
         // Swap buffers to display
         ctx.shared.bus.lock(|bus| {
