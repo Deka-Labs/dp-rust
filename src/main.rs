@@ -69,10 +69,17 @@ unsafe impl Sync for DisplayInfo {}
 #[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4])]
 mod app {
 
+    use hal::gpio::*;
+    use hal::i2c::I2c;
+    use hal::prelude::*;
+    use hal::timer::MonoTimerUs;
+
+    use crate::pac::I2C1;
+
     use chrono::prelude::*;
     use chrono::Duration;
-
     use chrono::Utc;
+
     use embedded_graphics::mono_font::ascii::FONT_10X20;
     use embedded_graphics::mono_font::MonoTextStyleBuilder;
     use embedded_graphics::pixelcolor::BinaryColor;
@@ -82,16 +89,9 @@ mod app {
     use embedded_graphics::primitives::Triangle;
     use embedded_graphics::text::Text;
 
-    use crate::format::format_time;
-    use crate::hal::gpio::*;
-    use crate::hal::prelude::*;
-    use crate::hal::timer::MonoTimerUs;
-
-    use crate::pac::I2C1;
-
     use crate::ds3231::DS3231;
     use crate::format::format_string;
-    use crate::i2c::I2c;
+    use crate::format::format_time;
     use crate::joystick::*;
     use crate::lm75b::LM75B;
     use crate::ssd1306::SSD1306;
@@ -132,7 +132,7 @@ mod app {
     #[init]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
-        let mut dp = ctx.device;
+        let dp = ctx.device;
 
         let rcc = dp.RCC.constrain();
         let clocks = rcc.cfgr.use_hse(8.MHz()).sysclk(100.MHz()).freeze();
@@ -293,7 +293,7 @@ mod app {
             *prev_pressed = pressed;
         });
 
-        handle_input::spawn_after(200.millis()).unwrap();
+        handle_input::spawn_after(100.millis()).unwrap();
     }
 
     /// Draw task draws content of `display_info` onto screen
