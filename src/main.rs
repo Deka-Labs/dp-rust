@@ -78,7 +78,6 @@ mod app {
     use embedded_graphics::pixelcolor::BinaryColor;
     use embedded_graphics::prelude::*;
     use embedded_graphics::primitives::Circle;
-    use embedded_graphics::primitives::Line;
     use embedded_graphics::primitives::PrimitiveStyleBuilder;
     use embedded_graphics::primitives::Triangle;
     use embedded_graphics::text::Text;
@@ -171,15 +170,13 @@ mod app {
         };
 
         // Configure buttons
-        let exti = &mut dp.EXTI;
-        let syscfg = &mut dp.SYSCFG.constrain();
         let gpioc = dp.GPIOC.split();
 
-        let up = ButtonPullUp::new(gpioa.pa1.into_pull_up_input(), exti, syscfg);
-        let down = ButtonPullUp::new(gpioc.pc0.into_pull_up_input(), exti, syscfg);
-        let left = ButtonPullUp::new(gpiob.pb0.into_pull_up_input(), exti, syscfg);
-        let right = ButtonPullUp::new(gpioa.pa4.into_pull_up_input(), exti, syscfg);
-        let center = ButtonPullUp::new(gpioc.pc1.into_pull_up_input(), exti, syscfg);
+        let up = ButtonPullUp::new(gpioa.pa1.into_pull_up_input());
+        let down = ButtonPullUp::new(gpioc.pc0.into_pull_up_input());
+        let left = ButtonPullUp::new(gpiob.pb0.into_pull_up_input());
+        let right = ButtonPullUp::new(gpioa.pa4.into_pull_up_input());
+        let center = ButtonPullUp::new(gpioc.pc1.into_pull_up_input());
 
         let joy = AccessoryShieldJoystick::new(up, down, left, right, center);
 
@@ -296,7 +293,7 @@ mod app {
             *prev_pressed = pressed;
         });
 
-        handle_input::spawn_after(100.millis()).unwrap();
+        handle_input::spawn_after(200.millis()).unwrap();
     }
 
     /// Draw task draws content of `display_info` onto screen
