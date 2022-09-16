@@ -46,7 +46,7 @@ impl LM75B {
             return Err(Error::BusError);
         }
 
-        let raw_temp = i16::from_be_bytes(buf) / 32; // 2^5, 5 to remove last 5 zeros in binary repr.
+        let raw_temp = i16::from_be_bytes(buf) >> 5;
         let real_temp = raw_temp as f32 * 0.125;
 
         self.avg[self.avg_pointer] = real_temp;
