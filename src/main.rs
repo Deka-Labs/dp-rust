@@ -26,7 +26,7 @@ mod ssd1306;
 /// Joystick driver
 mod joystick;
 
-use chrono::prelude::*;
+use chrono::{prelude::*, Duration};
 
 use panic_halt as _;
 
@@ -64,7 +64,21 @@ pub struct DisplayInfo {
     edit_field: RTCField,
 }
 
-unsafe impl Sync for DisplayInfo {}
+impl DisplayInfo {
+    pub fn add_time(&mut self, duration: i64) {
+        match self.edit_field {
+            RTCField::Hours => self.datetime += Duration::hours(duration),
+            RTCField::Minutes => self.datetime += Duration::minutes(duration),
+        }
+    }
+
+    pub fn sub_time(&mut self, duration: i64) {
+        match self.edit_field {
+            RTCField::Hours => self.datetime -= Duration::hours(duration),
+            RTCField::Minutes => self.datetime -= Duration::minutes(duration),
+        }
+    }
+}
 
 #[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4])]
 mod app {
@@ -245,55 +259,83 @@ mod app {
     }
 
     /// handle_input handles joystick
-    #[task(local = [speed: i64 = 1, prev_pressed: bool = false], shared = [display_info, joy])]
+    #[task(local = [speed: f32 = 1.0, sync_required: bool = false], shared = [display_info, joy])]
     fn handle_input(mut ctx: handle_input::Context) {
-        const MAX_SPEED: i64 = 5;
+        const MAX_SPEED: f32 = 5.0;
+        let update_interval = 100.millis();
+        handle_input::spawn_after(update_interval).unwrap();
 
         let speed = ctx.local.speed;
-        let prev_pressed = ctx.local.prev_pressed;
+        let sync_required = ctx.local.sync_required;
 
         let di = &mut ctx.shared.display_info;
 
         ctx.shared.joy.lock(|j| {
-            if j.up.pressed() {
-                di.lock(|i| match &i.edit_field {
-                    RTCField::Hours => i.datetime = i.datetime + Duration::hours(*speed),
-                    RTCField::Minutes => i.datetime = i.datetime + Duration::minutes(*speed),
+            j.update();
+
+            let state = j.position();
+
+            if let Some(pos) = state {
+                di.lock(|i| {
+                    use JoystickButton::*;
+
+                    // On click
+                    if j.clicked() {
+                        match &pos {
+                            // Up pressed
+                            Up => {
+                                i.add_time(1);
+                                *sync_required = true;
+                            }
+                            // Down pressed
+                            Down => {
+                                i.sub_time(1);
+                                *sync_required = true;
+                            }
+                            // Left pressed
+                            Left => {
+                                i.edit_field.next();
+                            }
+                            // Right pressed
+                            Right => {
+                                i.edit_field.prev();
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // On hold action
+                    if j.hold_time() * update_interval > 500.millis::<1, 1_000_000>() {
+                        match &pos {
+                            // Up pressed
+                            Up => {
+                                i.add_time(*speed as i64);
+                            }
+                            // Down pressed
+                            Down => {
+                                i.sub_time(*speed as i64);
+                            }
+                            _ => {}
+                        }
+
+                        if *speed < MAX_SPEED {
+                            *speed += 0.25
+                        }
+                    } else {
+                        *speed = 1.0;
+                    }
                 });
-            }
+            } else {
+                // else - Joystick unpressed
 
-            if j.down.pressed() {
-                di.lock(|i| match &i.edit_field {
-                    RTCField::Hours => i.datetime = i.datetime - Duration::hours(*speed),
-                    RTCField::Minutes => i.datetime = i.datetime - Duration::minutes(*speed),
-                });
-            }
-
-            if j.right.pressed() {
-                di.lock(|i| i.edit_field.next());
-            }
-
-            if j.left.pressed() {
-                di.lock(|i| i.edit_field.prev());
-            }
-
-            // Apply acceleration and save changes
-            let pressed = j.up.pressed() || j.down.pressed();
-            match (pressed, *prev_pressed) {
-                (false, true) => {
-                    // Reset speed when unpressed and set time in RTC with 0 seconds
-                    *speed = 1;
-
+                // Save changes
+                if j.just_unpressed() && *sync_required {
+                    *sync_required = false;
                     di.lock(|s| s.datetime = s.datetime.with_second(0).unwrap());
                     send_time_to_rtc::spawn(di.lock(|s| s.datetime.clone())).unwrap();
                 }
-                (true, true) if *speed < MAX_SPEED => *speed += 1, // If holding button -> accelerate
-                _ => {}                                            // Do nothing
             }
-            *prev_pressed = pressed;
         });
-
-        handle_input::spawn_after(100.millis()).unwrap();
     }
 
     /// Draw task draws content of `display_info` onto screen
