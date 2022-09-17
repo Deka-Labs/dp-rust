@@ -116,13 +116,6 @@ mod app {
     struct Shared {
         bus: I2c<I2C1, (PB8<AF4<OpenDrain>>, PB9<AF4<OpenDrain>>)>,
         display_info: DisplayInfo,
-        joy: AccessoryShieldJoystick<
-            ButtonPullUp<Pin<'A', 1>>,
-            ButtonPullUp<Pin<'C', 0>>,
-            ButtonPullUp<Pin<'B', 0>>,
-            ButtonPullUp<Pin<'A', 4>>,
-            ButtonPullUp<Pin<'C', 1>>,
-        >,
     }
 
     #[local]
@@ -131,6 +124,13 @@ mod app {
         display: SSD1306<PA8<Output<PushPull>>>,
         temp_probe: LM75B,
         rtc: DS3231,
+        joy: AccessoryShieldJoystick<
+            ButtonPullUp<Pin<'A', 1>>,
+            ButtonPullUp<Pin<'C', 0>>,
+            ButtonPullUp<Pin<'B', 0>>,
+            ButtonPullUp<Pin<'A', 4>>,
+            ButtonPullUp<Pin<'C', 1>>,
+        >,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -203,13 +203,13 @@ mod app {
             Shared {
                 bus: i2c,
                 display_info: di,
-                joy,
             },
             Local {
                 led,
                 display,
                 temp_probe,
                 rtc,
+                joy,
             },
             init::Monotonics(mono),
         )
@@ -259,7 +259,7 @@ mod app {
     }
 
     /// handle_input handles joystick
-    #[task(local = [speed: f32 = 1.0, sync_required: bool = false], shared = [display_info, joy])]
+    #[task(local = [joy, speed: f32 = 1.0, sync_required: bool = false], shared = [display_info])]
     fn handle_input(mut ctx: handle_input::Context) {
         const MAX_SPEED: f32 = 5.0;
         let update_interval = 100.millis();
@@ -270,72 +270,72 @@ mod app {
 
         let di = &mut ctx.shared.display_info;
 
-        ctx.shared.joy.lock(|j| {
-            j.update();
+        let j = ctx.local.joy;
 
-            let state = j.position();
+        j.update();
 
-            if let Some(pos) = state {
-                di.lock(|i| {
-                    use JoystickButton::*;
+        let state = j.position();
 
-                    // On click
-                    if j.clicked() {
-                        match &pos {
-                            // Up pressed
-                            Up => {
-                                i.add_time(1);
-                                *sync_required = true;
-                            }
-                            // Down pressed
-                            Down => {
-                                i.sub_time(1);
-                                *sync_required = true;
-                            }
-                            // Left pressed
-                            Left => {
-                                i.edit_field.next();
-                            }
-                            // Right pressed
-                            Right => {
-                                i.edit_field.prev();
-                            }
-                            _ => {}
+        if let Some(pos) = state {
+            di.lock(|i| {
+                use JoystickButton::*;
+
+                // On click
+                if j.clicked() {
+                    match &pos {
+                        // Up pressed
+                        Up => {
+                            i.add_time(1);
+                            *sync_required = true;
                         }
+                        // Down pressed
+                        Down => {
+                            i.sub_time(1);
+                            *sync_required = true;
+                        }
+                        // Left pressed
+                        Left => {
+                            i.edit_field.next();
+                        }
+                        // Right pressed
+                        Right => {
+                            i.edit_field.prev();
+                        }
+                        _ => {}
                     }
-
-                    // On hold action
-                    if j.hold_time() * update_interval > 500.millis::<1, 1_000_000>() {
-                        match &pos {
-                            // Up pressed
-                            Up => {
-                                i.add_time(*speed as i64);
-                            }
-                            // Down pressed
-                            Down => {
-                                i.sub_time(*speed as i64);
-                            }
-                            _ => {}
-                        }
-
-                        if *speed < MAX_SPEED {
-                            *speed += 0.25
-                        }
-                    } else {
-                        *speed = 1.0;
-                    }
-                });
-            } else {
-                // else - Joystick unpressed
-
-                // Save changes
-                if j.just_unpressed() && *sync_required {
-                    *sync_required = false;
-                    di.lock(|s| s.datetime = s.datetime.with_second(0).unwrap());
-                    send_time_to_rtc::spawn(di.lock(|s| s.datetime.clone())).unwrap();
                 }
+
+                // On hold action
+                if j.hold_time() * update_interval > 500.millis::<1, 1_000_000>() {
+                    match &pos {
+                        // Up pressed
+                        Up => {
+                            i.add_time(*speed as i64);
+                        }
+                        // Down pressed
+                        Down => {
+                            i.sub_time(*speed as i64);
+                        }
+                        _ => {}
+                    }
+
+                    if *speed < MAX_SPEED {
+                        *speed += 0.25
+                    }
+                } else {
+                    *speed = 1.0;
+                }
+            });
+        } else {
+            // else - Joystick unpressed
+
+            // Save changes
+            if j.just_unpressed() && *sync_required {
+                *sync_required = false;
+                di.lock(|s| s.datetime = s.datetime.with_second(0).unwrap());
+                send_time_to_rtc::spawn(di.lock(|s| s.datetime.clone())).unwrap();
             }
-        });
+        }
     }
 
     /// Draw task draws content of `display_info` onto screen
