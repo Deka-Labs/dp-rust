@@ -83,6 +83,7 @@ impl DisplayInfo {
 #[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4])]
 mod app {
 
+    use cortex_m::asm::wfi;
     use hal::gpio::*;
     use hal::i2c::I2c;
     use hal::prelude::*;
@@ -198,6 +199,7 @@ mod app {
         tick::spawn().unwrap();
         grab_temperature::spawn().unwrap();
         handle_input::spawn().unwrap();
+        draw::spawn().unwrap();
 
         (
             Shared {
@@ -220,8 +222,7 @@ mod app {
     #[idle(local = [], shared = [])]
     fn idle(_ctx: idle::Context) -> ! {
         loop {
-            // Draw when not busy!
-            draw::spawn().ok();
+            wfi();
         }
     }
 
@@ -341,6 +342,8 @@ mod app {
     /// Draw task draws content of `display_info` onto screen
     #[task(local = [display], shared = [bus, display_info], priority = 1, capacity = 1)]
     fn draw(mut ctx: draw::Context) {
+        draw::spawn_after(100.millis()).unwrap();
+
         // Styles
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_10X20)
