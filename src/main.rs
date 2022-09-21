@@ -26,59 +26,10 @@ mod ssd1306;
 /// Joystick driver
 mod joystick;
 
-use chrono::{prelude::*, Duration};
+/// All information on display
+mod displayinfo;
 
 use panic_halt as _;
-
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, Default)]
-pub enum RTCField {
-    #[default]
-    Hours = 0,
-    Minutes,
-}
-
-impl RTCField {
-    pub fn next(&mut self) {
-        use RTCField::*;
-        *self = match self {
-            Hours => Minutes,
-            Minutes => Hours,
-        }
-    }
-
-    pub fn prev(&mut self) {
-        use RTCField::*;
-        *self = match self {
-            Hours => Minutes,
-            Minutes => Hours,
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct DisplayInfo {
-    datetime: DateTime<Utc>,
-    temperature: f32,
-
-    edit_field: RTCField,
-}
-
-impl DisplayInfo {
-    pub fn add_time(&mut self, duration: i64) {
-        match self.edit_field {
-            RTCField::Hours => self.datetime += Duration::hours(duration),
-            RTCField::Minutes => self.datetime += Duration::minutes(duration),
-        }
-    }
-
-    pub fn sub_time(&mut self, duration: i64) {
-        match self.edit_field {
-            RTCField::Hours => self.datetime -= Duration::hours(duration),
-            RTCField::Minutes => self.datetime -= Duration::minutes(duration),
-        }
-    }
-}
 
 #[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4])]
 mod app {
@@ -91,10 +42,6 @@ mod app {
 
     use crate::pac::I2C1;
 
-    use chrono::prelude::*;
-    use chrono::Duration;
-    use chrono::Utc;
-
     use embedded_graphics::mono_font::ascii::FONT_10X20;
     use embedded_graphics::mono_font::MonoTextStyleBuilder;
     use embedded_graphics::pixelcolor::BinaryColor;
@@ -104,14 +51,15 @@ mod app {
     use embedded_graphics::primitives::Triangle;
     use embedded_graphics::text::Text;
 
+    use crate::displayinfo::DateTime;
+    use crate::displayinfo::DisplayInfo;
+    use crate::displayinfo::RTCField;
     use crate::ds3231::DS3231;
     use crate::format::format_string;
     use crate::format::format_time;
     use crate::joystick::*;
     use crate::lm75b::LM75B;
     use crate::ssd1306::SSD1306;
-    use crate::DisplayInfo;
-    use crate::RTCField;
 
     #[shared]
     struct Shared {
@@ -178,11 +126,7 @@ mod app {
         let mut rtc = DS3231::new();
 
         rtc.update_time(&mut i2c).unwrap();
-        let di = DisplayInfo {
-            temperature: 0.0_f32, // Will update in grab_temperature task
-            datetime: rtc.time().clone(),
-            edit_field: RTCField::Hours,
-        };
+        let di = DisplayInfo::from_datetime(rtc.time());
 
         // Configure buttons
         let gpioc = dp.GPIOC.split();
@@ -218,7 +162,7 @@ mod app {
     }
 
     /// Idle function runs when nothing to do
-    /// Used for call draw task
+    /// Used for sleep
     #[idle(local = [], shared = [])]
     fn idle(_ctx: idle::Context) -> ! {
         loop {
@@ -234,12 +178,12 @@ mod app {
 
         // Add 1 seconds without request time from RTC
         let mut di = ctx.shared.display_info;
-        di.lock(|i| i.datetime = i.datetime + Duration::seconds(1))
+        di.lock(|i| i.tick())
     }
 
     /// Send new time to RTC
     #[task(local = [rtc], shared = [bus], priority = 3)]
-    fn send_time_to_rtc(mut ctx: send_time_to_rtc::Context, time: DateTime<Utc>) {
+    fn send_time_to_rtc(mut ctx: send_time_to_rtc::Context, time: DateTime) {
         let rtc = ctx.local.rtc;
         ctx.shared.bus.lock(|bus| {
             rtc.set_time(bus, time).expect("Failed to send time");
@@ -256,7 +200,7 @@ mod app {
         let temp = ctx.shared.bus.lock(|bus| lm75b.temperature(bus).unwrap());
 
         let mut di = ctx.shared.display_info;
-        di.lock(|i| i.temperature = temp);
+        di.lock(|i| i.set_temperature(temp));
     }
 
     /// handle_input handles joystick
@@ -296,11 +240,11 @@ mod app {
                         }
                         // Left pressed
                         Left => {
-                            i.edit_field.next();
+                            i.next_field();
                         }
                         // Right pressed
                         Right => {
-                            i.edit_field.prev();
+                            i.prev_field();
                         }
                         _ => {}
                     }
@@ -333,8 +277,8 @@ mod app {
             // Save changes
             if j.just_unpressed() && *sync_required {
                 *sync_required = false;
-                di.lock(|s| s.datetime = s.datetime.with_second(0).unwrap());
-                send_time_to_rtc::spawn(di.lock(|s| s.datetime.clone())).unwrap();
+                let time = di.lock(|s| s.reset_seconds().clone());
+                send_time_to_rtc::spawn(time).unwrap();
             }
         }
     }
@@ -366,7 +310,7 @@ mod app {
 
         // Draw time
         let time_str =
-            di.lock(|display_info| format_time(&mut str_buf, &display_info.datetime).unwrap());
+            di.lock(|display_info| format_time(&mut str_buf, display_info.datetime()).unwrap());
 
         let text = Text::with_alignment(
             time_str,
@@ -383,7 +327,7 @@ mod app {
             let pos_hours = 33;
             let pos_min = 64;
 
-            let p1 = match di.lock(|i| i.edit_field.clone()) {
+            let p1 = match di.lock(|i| i.field()) {
                 RTCField::Hours => Point::new(pos_hours, y),
                 RTCField::Minutes => Point::new(pos_min, y),
             };
@@ -404,7 +348,7 @@ mod app {
             let temp_str = di.lock(|display_info| {
                 format_string(
                     &mut str_buf,
-                    format_args!("{:.1} C", display_info.temperature),
+                    format_args!("{:.1} C", display_info.temperature()),
                 )
                 .unwrap()
             });
