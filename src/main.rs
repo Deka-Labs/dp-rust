@@ -3,6 +3,7 @@
 
 extern crate atomic_enum;
 extern crate chrono;
+extern crate heapless;
 extern crate spin;
 
 /// HAL library for our device
@@ -10,9 +11,6 @@ extern crate stm32f4xx_hal as hal;
 
 /// Peripheral Access Crate for our device
 pub use hal::pac;
-
-/// Mod for formatting strings
-mod format;
 
 /// I2C that can use DMA
 mod i2c;
@@ -58,7 +56,7 @@ mod app {
 
     use crate::ssd1306::SSD1306;
 
-    type StopwatchTimer = stopwatchtimer::StopwatchTimer<crate::pac::TIM3>;
+    pub type StopwatchTimer = stopwatchtimer::StopwatchTimer<crate::pac::TIM2>;
 
     #[shared]
     struct Shared {
@@ -109,7 +107,7 @@ mod app {
 
         // Timers
         let mono = dp.TIM5.monotonic_us(&clocks);
-        *ctx.local._stopwatch = Some(StopwatchTimer::new(dp.TIM3, hal::interrupt::TIM3, &clocks));
+        *ctx.local._stopwatch = Some(StopwatchTimer::new(dp.TIM2, hal::interrupt::TIM3, &clocks));
 
         // LED indicator
         let gpioa = dp.GPIOA.split();
@@ -245,8 +243,8 @@ mod app {
     }
 
     /// Handles stopwacth interrupts
-    #[task(binds = TIM3, shared = [&stopwatch], priority = 5)]
-    fn tim3_stopwatch_it(ctx: tim3_stopwatch_it::Context) {
+    #[task(binds = TIM2, shared = [&stopwatch], priority = 5)]
+    fn tim_stopwatch_it(ctx: tim_stopwatch_it::Context) {
         ctx.shared.stopwatch.increment();
     }
 }

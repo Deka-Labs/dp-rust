@@ -11,6 +11,9 @@ use stm32f4xx_hal::{
     timer::{CounterUs, Event, Instance, TimerExt},
 };
 
+/// Step between timer interrupts
+const TIMER_MS_STEP: u32 = 100;
+
 pub struct StopwatchTimer<TIM: Instance> {
     timer: RefCell<CounterUs<TIM>>,
     it: Interrupt,
@@ -22,8 +25,10 @@ pub struct StopwatchTimer<TIM: Instance> {
 impl<TIM: Instance> StopwatchTimer<TIM> {
     pub fn new(timer: TIM, tim_interrupt: Interrupt, clocks: &Clocks) -> Self {
         let mut tim = timer.counter(clocks);
-        tim.start(1.millis()).expect("Failed to start timer");
+        tim.start(TIMER_MS_STEP.millis())
+            .expect("Failed to start timer");
         tim.listen(Event::Update);
+        NVIC::mask(tim_interrupt);
 
         Self {
             timer: RefCell::new(tim),
@@ -37,6 +42,7 @@ impl<TIM: Instance> StopwatchTimer<TIM> {
     pub fn start(&self) {
         self.elapsed.store(0, Ordering::Relaxed);
         self.started.store(true, Ordering::Relaxed);
+
         unsafe {
             NVIC::unmask(self.it);
         }
@@ -51,7 +57,9 @@ impl<TIM: Instance> StopwatchTimer<TIM> {
     #[inline]
     pub fn increment(&self) {
         self.timer.borrow_mut().clear_interrupt(Event::Update);
-        self.elapsed.fetch_add(1, Ordering::Relaxed);
+        if self.started() {
+            self.elapsed.fetch_add(TIMER_MS_STEP, Ordering::Relaxed);
+        }
     }
 
     #[inline]

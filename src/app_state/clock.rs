@@ -1,3 +1,4 @@
+use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use atomic_enum::atomic_enum;
@@ -8,10 +9,11 @@ use embedded_graphics::{
     primitives::Triangle,
     text::{Alignment, Text},
 };
+use heapless::String;
 
 use spin::lock_api::RwLock;
 
-use crate::{ds3231::DS3231, format::format_time, i2c::I2c1Handle, joystick::Joystick};
+use crate::{ds3231::DS3231, i2c::I2c1Handle, joystick::Joystick};
 
 use super::{navigation::NavigationIcons, AppSharedState, AppStateTrait};
 
@@ -252,12 +254,19 @@ impl Drawable for ClockState {
         )?;
 
         // Draw time
-        let mut buf = [0_u8; 32];
-
+        let mut buf: String<32> = Default::default();
         let time = self.display_time.read();
-        let time_str = format_time(&mut buf, &time).unwrap();
+        write!(
+            &mut buf,
+            "{:02}:{:02}:{:02}",
+            time.hour(),
+            time.minute(),
+            time.second()
+        )
+        .unwrap();
+
         Text::with_alignment(
-            time_str,
+            &buf,
             Point { x: 64, y: 32 },
             self.state().content_style,
             Alignment::Center,

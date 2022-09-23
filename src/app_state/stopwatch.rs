@@ -1,22 +1,26 @@
+use core::fmt::Write;
+
+use chrono::Duration;
 use embedded_graphics::{
     pixelcolor::BinaryColor,
     prelude::*,
     text::{Alignment, Text},
 };
-use stm32f4xx_hal::pac::TIM3;
+use heapless::String;
 
-use crate::{joystick::Joystick, stopwatchtimer::StopwatchTimer};
+use crate::app::StopwatchTimer;
+use crate::joystick::Joystick;
 
 use super::{AppSharedState, AppStateTrait};
 
 pub struct StopwatchState {
     state: Option<AppSharedState>,
 
-    stopwatch: &'static StopwatchTimer<TIM3>,
+    stopwatch: &'static StopwatchTimer,
 }
 
 impl StopwatchState {
-    pub fn new(timer_ref: &'static StopwatchTimer<TIM3>) -> Self {
+    pub fn new(timer_ref: &'static StopwatchTimer) -> Self {
         Self {
             state: None,
             stopwatch: timer_ref,
@@ -77,11 +81,25 @@ impl Drawable for StopwatchState {
     {
         self.draw_header(target, "СЕКУНДОМЕТР")?;
 
-        let mut buf = [0_u8; 32];
-        let time_str = crate::format::format_u32(&mut buf, self.stopwatch.elapsed()).unwrap();
+        let mut buf: String<32> = Default::default();
+        let elapsed = Duration::milliseconds(self.stopwatch.elapsed() as i64);
+        let hours = elapsed.num_hours();
+        let minutes = elapsed.num_minutes() - 60 * hours;
+        let seconds = elapsed.num_seconds() - 60 * minutes - 60 * 60 * hours;
+        let ms = elapsed.num_milliseconds()
+            - 1000 * seconds
+            - 60 * 1000 * minutes
+            - 60 * 60 * 1000 * hours;
+
+        write!(
+            &mut buf,
+            "{:}:{:02}:{:02}.{:03}",
+            hours, minutes, seconds, ms
+        )
+        .unwrap();
 
         Text::with_alignment(
-            time_str,
+            &buf,
             Point { x: 64, y: 32 },
             self.state().content_style,
             Alignment::Center,
