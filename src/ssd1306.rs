@@ -86,7 +86,7 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C>
 
         self.send_command(0xAF)?; /*display ON*/
 
-        self.clear(BinaryColor::Off);
+        self.clear(BinaryColor::Off)?;
         self.send_image()?;
 
         return Ok(());
