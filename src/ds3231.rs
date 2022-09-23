@@ -1,4 +1,7 @@
+use core::cell::RefCell;
+
 use chrono::prelude::*;
+use critical_section::Mutex;
 
 use crate::i2c::BlockingI2C;
 
@@ -25,44 +28,43 @@ pub enum Error {
     I2CError,
 }
 
-pub struct DS3231 {
+#[derive(Debug)]
+pub struct DS3231<I2C: BlockingI2C + 'static> {
     time: DateTime<Utc>,
+    i2c: &'static Mutex<RefCell<I2C>>,
 }
 
-impl DS3231 {
-    pub fn new() -> Self {
+impl<I2C: BlockingI2C> DS3231<I2C> {
+    pub fn new(i2c: &'static Mutex<RefCell<I2C>>) -> Self {
         Self {
             time: DateTime::default(),
+            i2c,
         }
     }
 
-    pub fn update_time<B: BlockingI2C>(&mut self, bus: &mut B) -> Result<(), Error> {
-        let data = self.read_registers(bus)?;
+    pub fn update_time(&mut self) -> Result<(), Error> {
+        let data = self.read_registers()?;
 
-        let secs = Self::bcd_to_decimal(data[Register::Seconds as usize]);
+        let secs = bcd_to_decimal(data[Register::Seconds as usize]);
         self.time = self.time.with_second(secs as u32).unwrap();
 
-        let mins = Self::bcd_to_decimal(data[Register::Minutes as usize]);
+        let mins = bcd_to_decimal(data[Register::Minutes as usize]);
         self.time = self.time.with_minute(mins as u32).unwrap();
 
-        let hours = Self::hours_to_decimal(data[Register::Hours as usize]);
+        let hours = hours_to_decimal(data[Register::Hours as usize]);
         self.time = self.time.with_hour(hours as u32).unwrap();
 
         Ok(())
     }
 
-    pub fn set_time<B: BlockingI2C>(
-        &mut self,
-        bus: &mut B,
-        time: DateTime<Utc>,
-    ) -> Result<(), Error> {
+    pub fn set_time(&mut self, time: DateTime<Utc>) -> Result<(), Error> {
         let mut data = [0_u8; REGISTER_COUNT];
-        data[Register::Seconds as usize] = Self::decimal_to_bcd(time.second() as u8);
-        data[Register::Minutes as usize] = Self::decimal_to_bcd(time.minute() as u8);
+        data[Register::Seconds as usize] = decimal_to_bcd(time.second() as u8);
+        data[Register::Minutes as usize] = decimal_to_bcd(time.minute() as u8);
         // Store in 24H format
-        data[Register::Hours as usize] = Self::decimal_to_bcd(time.hour() as u8);
+        data[Register::Hours as usize] = decimal_to_bcd(time.hour() as u8);
 
-        self.write_registers(bus, data)?;
+        self.write_registers(data)?;
 
         Ok(())
     }
@@ -71,57 +73,65 @@ impl DS3231 {
         &self.time
     }
 
-    fn read_registers<B: BlockingI2C>(
-        &mut self,
-        bus: &mut B,
-    ) -> Result<[u8; REGISTER_COUNT], Error> {
+    fn read_registers(&self) -> Result<[u8; REGISTER_COUNT], Error> {
         let mut buf = [0_u8; REGISTER_COUNT];
-        if let Err(_) = bus.write_read(I2C_ADDRESS, &[0], &mut buf) {
-            return Err(Error::I2CError);
-        }
 
-        Ok(buf)
+        critical_section::with(|cs| {
+            let mut bus = self.i2c.borrow(cs).borrow_mut();
+
+            if let Err(_) = bus.write_read(I2C_ADDRESS, &[0], &mut buf) {
+                return Err(Error::I2CError);
+            }
+
+            Ok(buf)
+        })
     }
 
-    fn write_registers<B: BlockingI2C>(
-        &mut self,
-        bus: &mut B,
-        regs: [u8; REGISTER_COUNT],
-    ) -> Result<(), Error> {
+    fn write_registers(&self, regs: [u8; REGISTER_COUNT]) -> Result<(), Error> {
         let mut buf = [0_u8; REGISTER_COUNT + 1];
         buf[1..].copy_from_slice(&regs);
-        if let Err(_) = bus.write(I2C_ADDRESS, &buf) {
-            return Err(Error::I2CError);
-        }
 
-        Ok(())
-    }
+        critical_section::with(|cs| {
+            let mut bus = self.i2c.borrow(cs).borrow_mut();
 
-    fn bcd_to_decimal(bcd: u8) -> u8 {
-        ((bcd & 0b11110000) >> 4) * 10 + (bcd & 0b00001111)
-    }
-
-    fn decimal_to_bcd(d: u8) -> u8 {
-        (d / 10 << 4) | d % 10
-    }
-
-    fn hours_to_decimal(bcd: u8) -> u8 {
-        let is_ampm_format = (HoursMasks::H12_24 as u8) & bcd;
-
-        if is_ampm_format != 0 {
-            if (HoursMasks::AmPm as u8) & bcd != 0 {
-                // If is PM
-                return 12
-                    + Self::bcd_to_decimal(
-                        bcd & !((HoursMasks::AmPm as u8) | (HoursMasks::H12_24 as u8)),
-                    );
-            } else {
-                return Self::bcd_to_decimal(
-                    bcd & !((HoursMasks::AmPm as u8) | (HoursMasks::H12_24 as u8)),
-                );
+            if let Err(_) = bus.write(I2C_ADDRESS, &buf) {
+                return Err(Error::I2CError);
             }
-        }
 
-        return Self::bcd_to_decimal(bcd & !(HoursMasks::H12_24 as u8));
+            Ok(())
+        })
     }
+}
+
+impl<I2C: BlockingI2C> Clone for DS3231<I2C> {
+    fn clone(&self) -> Self {
+        Self {
+            time: self.time.clone(),
+            i2c: self.i2c,
+        }
+    }
+}
+
+fn bcd_to_decimal(bcd: u8) -> u8 {
+    ((bcd & 0b11110000) >> 4) * 10 + (bcd & 0b00001111)
+}
+
+fn decimal_to_bcd(d: u8) -> u8 {
+    (d / 10 << 4) | d % 10
+}
+
+fn hours_to_decimal(bcd: u8) -> u8 {
+    let is_ampm_format = (HoursMasks::H12_24 as u8) & bcd;
+
+    if is_ampm_format != 0 {
+        if (HoursMasks::AmPm as u8) & bcd != 0 {
+            // If is PM
+            return 12
+                + bcd_to_decimal(bcd & !((HoursMasks::AmPm as u8) | (HoursMasks::H12_24 as u8)));
+        } else {
+            return bcd_to_decimal(bcd & !((HoursMasks::AmPm as u8) | (HoursMasks::H12_24 as u8)));
+        }
+    }
+
+    return bcd_to_decimal(bcd & !(HoursMasks::H12_24 as u8));
 }
