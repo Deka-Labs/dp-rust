@@ -30,34 +30,32 @@ pub enum Error {
 
 #[derive(Debug)]
 pub struct DS3231<I2C: BlockingI2C + 'static> {
-    time: DateTime<Utc>,
     i2c: &'static Mutex<RefCell<I2C>>,
 }
 
 impl<I2C: BlockingI2C> DS3231<I2C> {
     pub fn new(i2c: &'static Mutex<RefCell<I2C>>) -> Self {
-        Self {
-            time: DateTime::default(),
-            i2c,
-        }
+        Self { i2c }
     }
 
-    pub fn update_time(&mut self) -> Result<(), Error> {
+    pub fn update_time(&self) -> Result<DateTime<Utc>, Error> {
         let data = self.read_registers()?;
 
+        let mut time: DateTime<Utc> = Default::default();
+
         let secs = bcd_to_decimal(data[Register::Seconds as usize]);
-        self.time = self.time.with_second(secs as u32).unwrap();
+        time = time.with_second(secs as u32).unwrap();
 
         let mins = bcd_to_decimal(data[Register::Minutes as usize]);
-        self.time = self.time.with_minute(mins as u32).unwrap();
+        time = time.with_minute(mins as u32).unwrap();
 
         let hours = hours_to_decimal(data[Register::Hours as usize]);
-        self.time = self.time.with_hour(hours as u32).unwrap();
+        time = time.with_hour(hours as u32).unwrap();
 
-        Ok(())
+        Ok(time)
     }
 
-    pub fn set_time(&mut self, time: DateTime<Utc>) -> Result<(), Error> {
+    pub fn set_time(&self, time: DateTime<Utc>) -> Result<(), Error> {
         let mut data = [0_u8; REGISTER_COUNT];
         data[Register::Seconds as usize] = decimal_to_bcd(time.second() as u8);
         data[Register::Minutes as usize] = decimal_to_bcd(time.minute() as u8);
@@ -67,10 +65,6 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
         self.write_registers(data)?;
 
         Ok(())
-    }
-
-    pub fn time(&self) -> &DateTime<Utc> {
-        &self.time
     }
 
     fn read_registers(&self) -> Result<[u8; REGISTER_COUNT], Error> {
@@ -105,10 +99,7 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
 
 impl<I2C: BlockingI2C> Clone for DS3231<I2C> {
     fn clone(&self) -> Self {
-        Self {
-            time: self.time.clone(),
-            i2c: self.i2c,
-        }
+        Self { i2c: self.i2c }
     }
 }
 

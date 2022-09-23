@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
 
+extern crate atomic_enum;
 extern crate chrono;
 extern crate spin;
+
 /// HAL library for our device
 extern crate stm32f4xx_hal as hal;
 
