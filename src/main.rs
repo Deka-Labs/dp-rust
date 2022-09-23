@@ -33,6 +33,7 @@ mod app {
 
     use cortex_m::asm::wfi;
 
+    use embedded_graphics::pixelcolor::BinaryColor;
     use hal::gpio::*;
 
     use hal::prelude::*;
@@ -111,6 +112,11 @@ mod app {
 
         let mut rtc = DS3231::new(i2c);
 
+        let mut timer = dp.TIM2.counter_us(&clocks);
+        if let Err(e) = timer.start(1.secs()) {
+            panic!("{:?}", e);
+        }
+
         rtc.update_time().unwrap();
 
         // Configure buttons
@@ -128,9 +134,9 @@ mod app {
         app_state.write().enter(AppSharedState::new());
 
         // Spawn repeating tasks
-        tick::spawn().unwrap();
-        handle_input::spawn().unwrap();
         draw::spawn().unwrap();
+        handle_input::spawn().unwrap();
+        tick::spawn().unwrap();
 
         (
             Shared { app_state },
@@ -165,11 +171,19 @@ mod app {
     }
 
     /// handle_input handles joystick
-    #[task(local = [joy, speed: f32 = 1.0, sync_required: bool = false], shared = [])]
-    fn handle_input(_ctx: handle_input::Context) {
+    #[task(local = [joy], shared = [&app_state], priority = 3)]
+    fn handle_input(ctx: handle_input::Context) {
+        let update_interval = 100.millis();
+        handle_input::spawn_after(update_interval).unwrap();
+
+        let j = ctx.local.joy;
+        j.update();
+
+        if let Some(s) = ctx.shared.app_state.try_read() {
+            s.handle_input(j);
+        }
+
         // const MAX_SPEED: f32 = 5.0;
-        // let update_interval = 100.millis();
-        // handle_input::spawn_after(update_interval).unwrap();
 
         // let speed = ctx.local.speed;
         // let sync_required = ctx.local.sync_required;
@@ -245,28 +259,41 @@ mod app {
     /// Draw task draws content of `display_info` onto screen
     #[task(local = [display], shared = [&app_state], priority = 3, capacity = 1)]
     fn draw(ctx: draw::Context) {
-        draw::spawn_after(100.millis()).unwrap();
+        draw::spawn_after(200.millis()).ok();
 
         let display = ctx.local.display;
 
         // We will skip usage if borrowed mutably beacuse it is means that we're changing state
         if let Some(s) = ctx.shared.app_state.try_read() {
-            display.clear();
+            display.clear(BinaryColor::Off).unwrap();
 
             s.draw(display).ok();
 
             // Swap buffers to display
             display.swap();
+
+            let _s = 0;
         }
     }
 
     /// Task for switch next state
     /// Should be lowest priority
-    #[task(priority = 1)]
-    fn next_state(_ctx: next_state::Context) {}
+    #[task(priority = 1, local=[rtc], shared = [&app_state])]
+    fn change_state(ctx: change_state::Context, next: bool) {
+        let mut cur_state = ctx.shared.app_state.write();
 
-    /// Task for switch next state
-    /// Should be lowest priority
-    #[task(priority = 1)]
-    fn prev_state(_ctx: prev_state::Context) {}
+        if next {
+            match *cur_state {
+                AppState::Clock(_) => cur_state.switch(TimerState::new()),
+                AppState::Timer(_) => cur_state.switch(StopwatchState::new()),
+                AppState::Stopwatch(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
+            };
+        } else {
+            match *cur_state {
+                AppState::Clock(_) => cur_state.switch(StopwatchState::new()),
+                AppState::Timer(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
+                AppState::Stopwatch(_) => cur_state.switch(TimerState::new()),
+            };
+        }
+    }
 }

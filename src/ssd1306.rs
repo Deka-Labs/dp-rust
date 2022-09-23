@@ -86,14 +86,10 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C>
 
         self.send_command(0xAF)?; /*display ON*/
 
-        self.clear();
+        self.clear(BinaryColor::Off);
         self.send_image()?;
 
         return Ok(());
-    }
-
-    pub fn clear(&mut self) {
-        self.buffer[1..].fill(0) // Skip 1 data byte
     }
 
     pub fn dot(&mut self, p: Point, filled: bool) {
@@ -186,6 +182,13 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C> DrawTarget
         for p in pixels {
             self.dot(p.0, p.1.is_on())
         }
+
+        Ok(())
+    }
+
+    fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
+        let fill_byte = if color == BinaryColor::Off { 0 } else { 255 };
+        self.buffer[1..].fill(fill_byte); // Skip 1 data byte
 
         Ok(())
     }

@@ -7,9 +7,9 @@ use embedded_graphics::{
 
 use spin::lock_api::RwLock;
 
-use crate::{ds3231::DS3231, format::format_time, i2c::I2c1Handle};
+use crate::{ds3231::DS3231, format::format_time, i2c::I2c1Handle, joystick::Joystick};
 
-use super::{AppSharedState, AppStateTrait};
+use super::{navigation::NavigationIcons, AppSharedState, AppStateTrait};
 
 pub struct ClockState {
     state: Option<AppSharedState>,
@@ -50,6 +50,27 @@ impl AppStateTrait for ClockState {
         // On tick increment time
         *self.display_time.write() += Duration::seconds(1);
     }
+
+    fn handle_input<J: Joystick>(&self, j: &J) {
+        if j.clicked() && j.position().is_some() {
+            let pos = j.position().as_ref().unwrap();
+
+            use crate::joystick::JoystickButton::*;
+
+            match pos {
+                Left => {
+                    // Request from app mode switch
+                    // It will run after exit from this function due low priority
+                    crate::app::change_state::spawn(false).ok();
+                }
+                Right => {
+                    crate::app::change_state::spawn(true).ok();
+                }
+
+                _ => {}
+            }
+        }
+    }
 }
 
 impl Drawable for ClockState {
@@ -61,6 +82,16 @@ impl Drawable for ClockState {
         D: DrawTarget<Color = Self::Color>,
     {
         self.draw_header(target, "ЧАСЫ")?;
+        self.draw_navigation(target)?;
+
+        // Draw UI hints
+        let state = self.state();
+        state.navigation_icons.draw_icon_and_text(
+            target,
+            NavigationIcons::Center,
+            Point::new(20, 60),
+            Text::new("Изменить", Default::default(), state.small_text_style),
+        )?;
 
         // Draw time
         let mut buf = [0_u8; 32];

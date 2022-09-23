@@ -22,7 +22,7 @@ impl<const P: char, const N: u8> Button for ButtonPullUp<Pin<P, N, Input>> {
 }
 
 #[repr(u8)]
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum JoystickButton {
     Up = 0,
     Down,
