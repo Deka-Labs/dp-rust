@@ -26,6 +26,10 @@ pub fn format_time<'s, TZ: TimeZone>(
     )
 }
 
+pub fn format_u32<'s>(buffer: &'s mut [u8], time: u32) -> Result<&'s str, Error> {
+    format_string(buffer, format_args!("{:}", time))
+}
+
 struct FormatBuffer<'s> {
     buffer: &'s mut [u8],
     used: usize,

@@ -1,16 +1,26 @@
-use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
+use embedded_graphics::{
+    pixelcolor::BinaryColor,
+    prelude::*,
+    text::{Alignment, Text},
+};
+use stm32f4xx_hal::pac::TIM3;
 
-use crate::joystick::Joystick;
+use crate::{joystick::Joystick, stopwatchtimer::StopwatchTimer};
 
 use super::{AppSharedState, AppStateTrait};
 
 pub struct StopwatchState {
     state: Option<AppSharedState>,
+
+    stopwatch: &'static StopwatchTimer<TIM3>,
 }
 
 impl StopwatchState {
-    pub fn new() -> Self {
-        Self { state: None }
+    pub fn new(timer_ref: &'static StopwatchTimer<TIM3>) -> Self {
+        Self {
+            state: None,
+            stopwatch: timer_ref,
+        }
     }
 }
 
@@ -43,6 +53,13 @@ impl AppStateTrait for StopwatchState {
                 Right => {
                     crate::app::change_state::spawn(true).ok();
                 }
+                Center => {
+                    if self.stopwatch.started() {
+                        self.stopwatch.stop();
+                    } else {
+                        self.stopwatch.start();
+                    }
+                }
 
                 _ => {}
             }
@@ -59,6 +76,17 @@ impl Drawable for StopwatchState {
         D: DrawTarget<Color = Self::Color>,
     {
         self.draw_header(target, "СЕКУНДОМЕТР")?;
+
+        let mut buf = [0_u8; 32];
+        let time_str = crate::format::format_u32(&mut buf, self.stopwatch.elapsed()).unwrap();
+
+        Text::with_alignment(
+            time_str,
+            Point { x: 64, y: 32 },
+            self.state().content_style,
+            Alignment::Center,
+        )
+        .draw(target)?;
 
         Ok(())
     }

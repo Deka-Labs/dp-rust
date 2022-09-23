@@ -26,6 +26,9 @@ mod ssd1306;
 /// Joystick driver
 mod joystick;
 
+/// Stopwatch abstraction for Timer
+mod stopwatchtimer;
+
 mod app_state;
 
 use panic_halt as _;
@@ -36,8 +39,8 @@ mod app {
     use cortex_m::asm::wfi;
 
     use embedded_graphics::pixelcolor::BinaryColor;
-    use hal::gpio::*;
 
+    use hal::gpio::*;
     use hal::prelude::*;
     use hal::timer::MonoTimerUs;
 
@@ -51,19 +54,30 @@ mod app {
     use crate::ds3231::DS3231;
     use crate::i2c::I2c1Handle;
     use crate::joystick::*;
+    use crate::stopwatchtimer;
 
     use crate::ssd1306::SSD1306;
+
+    type StopwatchTimer = stopwatchtimer::StopwatchTimer<crate::pac::TIM3>;
 
     #[shared]
     struct Shared {
         app_state: RwLock<AppState>,
+        stopwatch: &'static StopwatchTimer,
     }
 
     #[local]
     struct Local {
+        /// indicate work of plate. Used in `tick`
         led: PA5<Output>,
+
+        /// Used in `draw`
         display: SSD1306<'static, PA8<Output<PushPull>>, I2c1Handle>,
+
+        /// Used to passthrough in ClockState in `change_state`
         rtc: DS3231<I2c1Handle>,
+
+        /// Handles input
         joy: AccessoryShieldJoystick<
             ButtonPullUp<Pin<'A', 1>>,
             ButtonPullUp<Pin<'C', 0>>,
@@ -83,7 +97,9 @@ mod app {
     /// * Creates I2C bus, display, temperature sensor, RTC
     /// * Configures joystick
     /// * Starts repeating tasks
-    #[init]
+    #[init(local = [
+        _stopwatch: Option<StopwatchTimer> = None
+    ])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
         let dp = ctx.device;
@@ -91,11 +107,13 @@ mod app {
         let rcc = dp.RCC.constrain();
         let clocks = rcc.cfgr.use_hse(8.MHz()).sysclk(100.MHz()).freeze();
 
+        // Timers
+        let mono = dp.TIM5.monotonic_us(&clocks);
+        *ctx.local._stopwatch = Some(StopwatchTimer::new(dp.TIM3, hal::interrupt::TIM3, &clocks));
+
         // LED indicator
         let gpioa = dp.GPIOA.split();
         let led = gpioa.pa5.into_push_pull_output();
-
-        let mono = dp.TIM5.monotonic_us(&clocks);
 
         // I2C bus init
         let gpiob = dp.GPIOB.split();
@@ -112,13 +130,7 @@ mod app {
         let mut display = SSD1306::new(gpioa.pa8.into_push_pull_output(), i2c);
         display.init().expect("Display init failure");
 
-        let mut rtc = DS3231::new(i2c);
-
-        let mut timer = dp.TIM2.counter_us(&clocks);
-        if let Err(e) = timer.start(1.secs()) {
-            panic!("{:?}", e);
-        }
-
+        let rtc = DS3231::new(i2c);
         rtc.update_time().unwrap();
 
         // Configure buttons
@@ -141,7 +153,10 @@ mod app {
         tick::spawn().unwrap();
 
         (
-            Shared { app_state },
+            Shared {
+                app_state,
+                stopwatch: ctx.local._stopwatch.as_ref().unwrap(),
+            },
             Local {
                 led,
                 display,
@@ -208,22 +223,30 @@ mod app {
 
     /// Task for switch next state
     /// Should be lowest priority
-    #[task(priority = 1, local=[rtc], shared = [&app_state])]
+    #[task(priority = 1, local=[rtc], shared = [&app_state, &stopwatch])]
     fn change_state(ctx: change_state::Context, next: bool) {
         let mut cur_state = ctx.shared.app_state.write();
+
+        let stopwatch = ctx.shared.stopwatch;
 
         if next {
             match *cur_state {
                 AppState::Clock(_) => cur_state.switch(TimerState::new()),
-                AppState::Timer(_) => cur_state.switch(StopwatchState::new()),
+                AppState::Timer(_) => cur_state.switch(StopwatchState::new(stopwatch)),
                 AppState::Stopwatch(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
             };
         } else {
             match *cur_state {
-                AppState::Clock(_) => cur_state.switch(StopwatchState::new()),
+                AppState::Clock(_) => cur_state.switch(StopwatchState::new(stopwatch)),
                 AppState::Timer(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
                 AppState::Stopwatch(_) => cur_state.switch(TimerState::new()),
             };
         }
+    }
+
+    /// Handles stopwacth interrupts
+    #[task(binds = TIM3, shared = [&stopwatch], priority = 5)]
+    fn tim3_stopwatch_it(ctx: tim3_stopwatch_it::Context) {
+        ctx.shared.stopwatch.increment();
     }
 }
