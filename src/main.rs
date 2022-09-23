@@ -175,7 +175,7 @@ mod app {
     /// handle_input handles joystick
     #[task(local = [joy], shared = [&app_state], priority = 3)]
     fn handle_input(ctx: handle_input::Context) {
-        let update_interval = 100.millis();
+        let update_interval = 50.millis();
         handle_input::spawn_after(update_interval).unwrap();
 
         let j = ctx.local.joy;
@@ -184,78 +184,6 @@ mod app {
         if let Some(s) = ctx.shared.app_state.try_read() {
             s.handle_input(j);
         }
-
-        // const MAX_SPEED: f32 = 5.0;
-
-        // let speed = ctx.local.speed;
-        // let sync_required = ctx.local.sync_required;
-
-        // let j = ctx.local.joy;
-
-        // j.update();
-
-        // let state = j.position();
-
-        // if let Some(pos) = state {
-        //     di.lock(|i| {
-        //         use JoystickButton::*;
-
-        //         // On click
-        //         if j.clicked() {
-        //             match &pos {
-        //                 // Up pressed
-        //                 Up => {
-        //                     i.add_time(1);
-        //                     *sync_required = true;
-        //                 }
-        //                 // Down pressed
-        //                 Down => {
-        //                     i.sub_time(1);
-        //                     *sync_required = true;
-        //                 }
-        //                 // Left pressed
-        //                 Left => {
-        //                     i.next_field();
-        //                 }
-        //                 // Right pressed
-        //                 Right => {
-        //                     i.prev_field();
-        //                 }
-        //                 _ => {}
-        //             }
-        //         }
-
-        //         // On hold action
-        //         if j.hold_time() * update_interval > 500.millis::<1, 1_000_000>() {
-        //             match &pos {
-        //                 // Up pressed
-        //                 Up => {
-        //                     i.add_time(*speed as i64);
-        //                 }
-        //                 // Down pressed
-        //                 Down => {
-        //                     i.sub_time(*speed as i64);
-        //                 }
-        //                 _ => {}
-        //             }
-
-        //             if *speed < MAX_SPEED {
-        //                 *speed += 0.25
-        //             }
-        //         } else {
-        //             *speed = 1.0;
-        //         }
-        //     });
-        // } else {
-        //     // else - Joystick unpressed
-
-        //     // Save changes
-        //     if j.just_unpressed() && *sync_required {
-        //         *sync_required = false;
-        //         let time = di.lock(|s| s.reset_seconds().clone());
-        //         send_time_to_rtc::spawn(time).unwrap();
-        //     }
-        // }
     }
 
     /// Draw task draws content of `display_info` onto screen

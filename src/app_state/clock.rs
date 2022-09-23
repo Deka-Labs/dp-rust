@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use atomic_enum::atomic_enum;
 use chrono::{prelude::*, Duration};
@@ -15,6 +15,8 @@ use crate::{ds3231::DS3231, format::format_time, i2c::I2c1Handle, joystick::Joys
 
 use super::{navigation::NavigationIcons, AppSharedState, AppStateTrait};
 
+const SPEED_STEPS: u32 = 8;
+
 #[atomic_enum]
 enum EditField {
     Hours,
@@ -29,7 +31,7 @@ pub struct ClockState {
 
     edit_mode: AtomicBool,
     edit_field: AtomicEditField,
-    edit_speed: f32,
+    edit_speed: AtomicU32,
 }
 
 impl ClockState {
@@ -41,7 +43,7 @@ impl ClockState {
 
             edit_mode: AtomicBool::new(false),
             edit_field: AtomicEditField::new(EditField::Hours),
-            edit_speed: 1.0,
+            edit_speed: AtomicU32::new(SPEED_STEPS),
         }
     }
 
@@ -75,6 +77,13 @@ impl ClockState {
 
     /// In edit mode navigation unavaiable
     fn handle_input_edit_mode<J: Joystick>(&self, j: &J) {
+        const HOLD_DURATION_TICK: u32 = 10;
+        const MAX_SPEED: f32 = 5.0;
+
+        if j.position().is_none() {
+            return;
+        }
+
         if j.clicked() {
             let pos = j.position().as_ref().unwrap();
 
@@ -82,9 +91,9 @@ impl ClockState {
 
             match pos {
                 // Up pressed
-                Up => self.edit_field_add(),
+                Up => self.edit_field_add(1.0),
                 // Down pressed
-                Down => self.edit_field_sub(),
+                Down => self.edit_field_sub(1.0),
                 // Left pressed
                 Left => self.edit_field_prev(),
                 // Right pressed
@@ -96,29 +105,47 @@ impl ClockState {
                 }
             }
         }
+
+        if j.hold_time() > HOLD_DURATION_TICK {
+            let pos = j.position().as_ref().unwrap();
+
+            let speed_raw = self.edit_speed.load(Ordering::Acquire);
+            let speed: f32 = speed_raw as f32 / SPEED_STEPS as f32;
+
+            use crate::joystick::JoystickButton::*;
+            match pos {
+                // Up pressed
+                Up => {
+                    self.edit_field_add(speed);
+                }
+                // Down pressed
+                Down => {
+                    self.edit_field_sub(speed);
+                }
+                _ => {}
+            }
+
+            if speed < MAX_SPEED {
+                self.edit_speed.store(speed_raw + 1, Ordering::Release);
+            }
+        } else {
+            self.edit_speed.store(SPEED_STEPS, Ordering::Relaxed);
+        }
     }
 
     /// Add rounded `edit_speed` value to current edit value
-    fn edit_field_add(&self) {
+    fn edit_field_add(&self, speed: f32) {
         match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => {
-                *self.display_time.write() += Duration::hours(self.edit_speed as i64)
-            }
-            EditField::Minutes => {
-                *self.display_time.write() += Duration::minutes(self.edit_speed as i64)
-            }
+            EditField::Hours => *self.display_time.write() += Duration::hours(speed as i64),
+            EditField::Minutes => *self.display_time.write() += Duration::minutes(speed as i64),
         }
     }
 
     /// Substract rounded `edit_speed` value to current edit value
-    fn edit_field_sub(&self) {
+    fn edit_field_sub(&self, speed: f32) {
         match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => {
-                *self.display_time.write() -= Duration::hours(self.edit_speed as i64)
-            }
-            EditField::Minutes => {
-                *self.display_time.write() -= Duration::minutes(self.edit_speed as i64)
-            }
+            EditField::Hours => *self.display_time.write() -= Duration::hours(speed as i64),
+            EditField::Minutes => *self.display_time.write() -= Duration::minutes(speed as i64),
         }
     }
 
