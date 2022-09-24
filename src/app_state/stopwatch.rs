@@ -117,15 +117,18 @@ impl Drawable for StopwatchState {
         let hours = elapsed.num_hours();
         let minutes = elapsed.num_minutes() - 60 * hours;
         let seconds = elapsed.num_seconds() - 60 * minutes - 60 * 60 * hours;
-        let ms = elapsed.num_milliseconds()
+
+        // ms / 100 - to display only we supported
+        let hecto_ms = (elapsed.num_milliseconds()
             - 1000 * seconds
             - 60 * 1000 * minutes
-            - 60 * 60 * 1000 * hours;
+            - 60 * 60 * 1000 * hours)
+            / 100;
 
         write!(
             &mut buf,
-            "{:}:{:02}:{:02}.{:03}",
-            hours, minutes, seconds, ms
+            "{:}:{:02}:{:02}.{:01}",
+            hours, minutes, seconds, hecto_ms
         )
         .unwrap();
 
