@@ -27,6 +27,12 @@ mod joystick;
 /// Stopwatch abstraction for Timer
 mod stopwatchtimer;
 
+/// Countdown timer to implement timer
+mod countdowntimer;
+
+/// Buzzer to make sounds
+mod buzzer;
+
 mod app_state;
 
 use panic_halt as _;
@@ -46,22 +52,24 @@ mod app {
     use spin::lock_api::RwLock;
 
     use crate::app_state::prelude::*;
+    use crate::buzzer::Buzzer;
     use crate::i2c::init_i2c1;
     use crate::i2c::I2c1HandleProtected;
 
     use crate::ds3231::DS3231;
     use crate::i2c::I2c1Handle;
     use crate::joystick::*;
-    use crate::stopwatchtimer;
 
     use crate::ssd1306::SSD1306;
 
-    pub type StopwatchTimer = stopwatchtimer::StopwatchTimer<crate::pac::TIM2>;
+    pub type StopwatchTimer = crate::stopwatchtimer::StopwatchTimer<crate::pac::TIM2>;
+    pub type CountdownTimer = crate::countdowntimer::CountdownTimer<crate::pac::TIM4>;
 
     #[shared]
     struct Shared {
         app_state: RwLock<AppState>,
         stopwatch: &'static StopwatchTimer,
+        countdown: &'static CountdownTimer,
     }
 
     #[local]
@@ -96,7 +104,8 @@ mod app {
     /// * Configures joystick
     /// * Starts repeating tasks
     #[init(local = [
-        _stopwatch: Option<StopwatchTimer> = None
+        _stopwatch: Option<StopwatchTimer> = None,
+        _countdown: Option<CountdownTimer> = None,
     ])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
@@ -107,10 +116,20 @@ mod app {
 
         // Timers
         let mono = dp.TIM5.monotonic_us(&clocks);
-        *ctx.local._stopwatch = Some(StopwatchTimer::new(dp.TIM2, hal::interrupt::TIM3, &clocks));
+
+        let gpioa = dp.GPIOA.split();
+        let buzzer = Buzzer::new(dp.TIM3, gpioa.pa7, &clocks);
+
+        *ctx.local._stopwatch = Some(StopwatchTimer::new(dp.TIM2, hal::interrupt::TIM2, &clocks));
+        *ctx.local._countdown = Some(CountdownTimer::new(
+            dp.TIM4,
+            hal::interrupt::TIM4,
+            buzzer,
+            &clocks,
+        ));
 
         // LED indicator
-        let gpioa = dp.GPIOA.split();
+
         let led = gpioa.pa5.into_push_pull_output();
 
         // I2C bus init
@@ -154,6 +173,7 @@ mod app {
             Shared {
                 app_state,
                 stopwatch: ctx.local._stopwatch.as_ref().unwrap(),
+                countdown: ctx.local._countdown.as_ref().unwrap(),
             },
             Local {
                 led,
@@ -221,15 +241,16 @@ mod app {
 
     /// Task for switch next state
     /// Should be lowest priority
-    #[task(priority = 1, local=[rtc], shared = [&app_state, &stopwatch])]
+    #[task(priority = 1, local=[rtc], shared = [&app_state, &stopwatch, &countdown])]
     fn change_state(ctx: change_state::Context, next: bool) {
         let mut cur_state = ctx.shared.app_state.write();
 
         let stopwatch = ctx.shared.stopwatch;
+        let countdown = ctx.shared.countdown;
 
         if next {
             match *cur_state {
-                AppState::Clock(_) => cur_state.switch(TimerState::new()),
+                AppState::Clock(_) => cur_state.switch(TimerState::new(countdown)),
                 AppState::Timer(_) => cur_state.switch(StopwatchState::new(stopwatch)),
                 AppState::Stopwatch(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
             };
@@ -237,7 +258,7 @@ mod app {
             match *cur_state {
                 AppState::Clock(_) => cur_state.switch(StopwatchState::new(stopwatch)),
                 AppState::Timer(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
-                AppState::Stopwatch(_) => cur_state.switch(TimerState::new()),
+                AppState::Stopwatch(_) => cur_state.switch(TimerState::new(countdown)),
             };
         }
     }
@@ -246,5 +267,11 @@ mod app {
     #[task(binds = TIM2, shared = [&stopwatch], priority = 5)]
     fn tim_stopwatch_it(ctx: tim_stopwatch_it::Context) {
         ctx.shared.stopwatch.increment();
+    }
+
+    /// Handles stopwacth interrupts
+    #[task(binds = TIM4, shared = [&countdown], priority = 5)]
+    fn tim_countdown_it(ctx: tim_countdown_it::Context) {
+        ctx.shared.countdown.handle_it();
     }
 }

@@ -42,6 +42,12 @@ impl<TIM: Instance> StopwatchTimer<TIM> {
     pub fn start(&self) {
         self.started.store(true, Ordering::Relaxed);
 
+        // Restart timer
+        self.timer
+            .borrow_mut()
+            .start(TIMER_MS_STEP.millis())
+            .unwrap();
+
         // Safe: TIM interrupts doesn't affect any critical-section locked resources
         unsafe {
             NVIC::unmask(self.it);
