@@ -92,13 +92,9 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C>
         return Ok(());
     }
 
+    #[inline(always)]
     pub fn dot(&mut self, p: Point, filled: bool) {
-        if p.x < 0 || (SCREEN_WIDTH as i32) <= p.x {
-            return;
-        }
-        if p.y < 0 || (SCREEN_HEIGHT as i32) <= p.y {
-            return;
-        }
+        debug_assert!(self.bounding_box().contains(p));
 
         let page = p.y / (PAGE_COUNT as i32);
         let index = page * (SCREEN_WIDTH as i32) + p.x + 1; // +1 skip 1 data byte
