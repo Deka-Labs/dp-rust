@@ -28,9 +28,9 @@ pub struct NavigationDrawables {
 impl NavigationDrawables {
     pub fn new(style: &PrimitiveStyle<BinaryColor>) -> Self {
         Self {
-            up: Triangle::new(Point::new(-3, 0), Point::new(3, 3), Point::new(3, -3))
+            up: Triangle::new(Point::new(0, -3), Point::new(3, 3), Point::new(-3, 3))
                 .into_styled(style.clone()),
-            down: Triangle::new(Point::new(-3, 0), Point::new(3, 3), Point::new(3, -3))
+            down: Triangle::new(Point::new(0, 3), Point::new(3, -3), Point::new(-3, -3))
                 .into_styled(style.clone()),
             left: Triangle::new(Point::new(-3, 0), Point::new(3, 3), Point::new(3, -3))
                 .into_styled(style.clone()),

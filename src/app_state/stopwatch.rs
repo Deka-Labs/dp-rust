@@ -11,7 +11,7 @@ use heapless::String;
 use crate::app::StopwatchTimer;
 use crate::joystick::Joystick;
 
-use super::{AppSharedState, AppStateTrait};
+use super::{navigation::NavigationIcons, AppSharedState, AppStateTrait};
 
 pub struct StopwatchState {
     state: Option<AppSharedState>,
@@ -59,10 +59,13 @@ impl AppStateTrait for StopwatchState {
                 }
                 Center => {
                     if self.stopwatch.started() {
-                        self.stopwatch.stop();
+                        self.stopwatch.pause();
                     } else {
                         self.stopwatch.start();
                     }
+                }
+                Down => {
+                    self.stopwatch.stop();
                 }
 
                 _ => {}
@@ -80,7 +83,35 @@ impl Drawable for StopwatchState {
         D: DrawTarget<Color = Self::Color>,
     {
         self.draw_header(target, "СЕКУНДОМЕТР")?;
+        self.draw_navigation(target)?;
 
+        // Draw UI help
+        let center_button_hint = if self.stopwatch.started() {
+            "Пауза"
+        } else {
+            "Старт"
+        };
+
+        let state = self.state();
+        state.navigation_icons.draw_icon_and_text(
+            target,
+            NavigationIcons::Center,
+            Point::new(20, 46),
+            Text::new(
+                center_button_hint,
+                Default::default(),
+                state.small_text_style,
+            ),
+        )?;
+
+        state.navigation_icons.draw_icon_and_text(
+            target,
+            NavigationIcons::Down,
+            Point::new(20, 56),
+            Text::new("Стоп и сброс", Default::default(), state.small_text_style),
+        )?;
+
+        // Draw elapsed time
         let mut buf: String<32> = Default::default();
         let elapsed = Duration::milliseconds(self.stopwatch.elapsed() as i64);
         let hours = elapsed.num_hours();

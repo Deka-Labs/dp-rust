@@ -40,9 +40,9 @@ impl<TIM: Instance> StopwatchTimer<TIM> {
 
     #[inline]
     pub fn start(&self) {
-        self.elapsed.store(0, Ordering::Relaxed);
         self.started.store(true, Ordering::Relaxed);
 
+        // Safe: TIM interrupts doesn't affect any critical-section locked resources
         unsafe {
             NVIC::unmask(self.it);
         }
@@ -50,6 +50,13 @@ impl<TIM: Instance> StopwatchTimer<TIM> {
 
     #[inline]
     pub fn stop(&self) {
+        self.elapsed.store(0, Ordering::Relaxed);
+        self.started.store(false, Ordering::Relaxed);
+        NVIC::mask(self.it);
+    }
+
+    #[inline]
+    pub fn pause(&self) {
         self.started.store(false, Ordering::Relaxed);
         NVIC::mask(self.it);
     }
