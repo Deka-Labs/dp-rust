@@ -289,6 +289,10 @@ impl Drawable for TimerState {
             ),
         )?;
 
+        if int_state != TimerInternalState::Edit {
+            self.draw_navigation(target)?;
+        }
+
         // Draw current countdown
         let countdown_to_draw = match int_state {
             TimerInternalState::TimerEnd => 0,
