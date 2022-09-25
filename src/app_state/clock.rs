@@ -13,7 +13,8 @@ use heapless::String;
 
 use spin::lock_api::RwLock;
 
-use crate::{ds3231::DS3231, i2c::I2c1Handle, joystick::Joystick};
+use crate::app::I2c1Handle;
+use crate::{ds3231::DS3231, joystick::Joystick};
 
 use super::{navigation::NavigationIcons, AppSharedState, AppStateTrait};
 

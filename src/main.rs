@@ -3,6 +3,7 @@
 
 extern crate atomic_enum;
 extern crate chrono;
+extern crate cortex_m_rt;
 extern crate heapless;
 extern crate spin;
 
@@ -12,8 +13,11 @@ extern crate stm32f4xx_hal as hal;
 /// Peripheral Access Crate for our device
 pub use hal::pac;
 
-/// I2C that can use DMA
+/// Standart
 mod i2c;
+
+/// Async interrupt based I2C
+mod i2c_async;
 
 /// RTC
 mod ds3231;
@@ -46,9 +50,9 @@ mod app {
     // Cortex specific
     use cortex_m::asm::wfi;
 
+    use cortex_m::peripheral::NVIC;
     // HAL imports
     use hal::gpio::*;
-    use hal::i2c::I2c;
     use hal::pac::I2C1;
     use hal::prelude::*;
     use hal::timer::MonoTimerUs;
@@ -63,6 +67,7 @@ mod app {
     use crate::app_state::prelude::*;
     use crate::buzzer::Buzzer;
     use crate::ds3231::DS3231;
+    use crate::i2c_async::*;
     use crate::joystick::*;
     use crate::ssd1306::SSD1306;
 
@@ -114,9 +119,9 @@ mod app {
     #[init(local = [
         _stopwatch: Option<StopwatchTimer> = None,
         _countdown: Option<CountdownTimer> = None,
-        _i2c_bus: Option<I2c1HandleProtected> = None,
+        _i2c_bus: Option<I2c1Handle> = None,
     ])]
-    fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+    fn init(mut ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
         let dp = ctx.device;
 
@@ -143,24 +148,23 @@ mod app {
 
         // I2C bus init
         let gpiob = dp.GPIOB.split();
-        let i2c = dp.I2C1.i2c(
+        let i2c = I2c::new(
+            dp.I2C1,
             (
                 gpiob.pb8.into_alternate_open_drain(),
                 gpiob.pb9.into_alternate_open_drain(),
             ),
-            400.kHz(),
+            100.kHz(),
             &clocks,
         );
 
-        *ctx.local._i2c_bus = Some(Mutex::new(RefCell::new(i2c)));
+        *ctx.local._i2c_bus = Some(i2c);
         let i2c_bus_ref = ctx.local._i2c_bus.as_ref().unwrap();
 
         // Display and sensors
         let mut display = SSD1306::new(gpioa.pa8.into_push_pull_output(), i2c_bus_ref);
-        display.init().expect("Display init failure");
 
         let rtc = DS3231::new(i2c_bus_ref);
-        rtc.update_time().unwrap();
 
         // Configure buttons
         let gpioc = dp.GPIOC.split();
@@ -173,7 +177,9 @@ mod app {
 
         let joy = AccessoryShieldJoystick::new(up, down, left, right, center);
 
-        let app_state = RwLock::new(AppState::Clock(ClockState::new(&rtc)));
+        let app_state = RwLock::new(AppState::Timer(TimerState::new(
+            ctx.local._countdown.as_ref().unwrap(),
+        )));
         app_state.write().enter(AppSharedState::new());
 
         // Spawn repeating tasks
@@ -237,6 +243,9 @@ mod app {
         draw::spawn_after(200.millis()).ok();
 
         let display = ctx.local.display;
+        if !display.initialized() {
+            display.init().unwrap();
+        }
 
         // We will skip usage if borrowed mutably beacuse it is means that we're changing state
         if let Some(s) = ctx.shared.app_state.try_read() {
@@ -285,5 +294,15 @@ mod app {
     #[task(binds = TIM4, shared = [&countdown], priority = 5)]
     fn tim_countdown_it(ctx: tim_countdown_it::Context) {
         ctx.shared.countdown.handle_it();
+    }
+
+    #[task(binds = I2C1_EV, shared=[], priority = 7)]
+    fn i2c1_ev(_ctx: i2c1_ev::Context) {
+        unsafe { I2c::<I2C1, (PB8<AF4<OpenDrain>>, PB9<AF4<OpenDrain>>)>::handle_event_interrupt() }
+    }
+
+    #[task(binds = I2C1_ER, shared=[], priority = 7)]
+    fn i2c1_er(_ctx: i2c1_er::Context) {
+        unsafe { I2c::<I2C1, (PB8<AF4<OpenDrain>>, PB9<AF4<OpenDrain>>)>::handle_error_interrupt() }
     }
 }

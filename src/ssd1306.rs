@@ -1,10 +1,11 @@
-use core::cell::RefCell;
+use core::{cell::RefCell, task::Poll};
 
+use crate::i2c_async::I2COperationFuture;
 use cortex_m::asm::nop;
 use critical_section::Mutex;
 use stm32f4xx_hal::gpio::{Output, Pin, PushPull};
 
-use crate::i2c::BlockingI2C;
+use crate::i2c_async::NonBlockingI2C;
 
 use embedded_graphics::{pixelcolor::BinaryColor, prelude::*, primitives::Rectangle};
 
@@ -21,22 +22,28 @@ pub enum OperationError {
     I2CError,
 }
 
-pub struct SSD1306<'bus, PIN, I2C: BlockingI2C + 'bus> {
+pub struct SSD1306<'bus, PIN, I2C: NonBlockingI2C + 'bus> {
     reset_pin: PIN,
-    i2c: &'bus Mutex<RefCell<I2C>>,
+    i2c: &'bus I2C,
 
     buffer: [u8; BUFFER_SIZE + 1], // The first byte is Control byte 0x40
+
+    initialized: bool,
+
+    fututre: Option<I2COperationFuture>,
 }
 
-impl<'bus, const P: char, const N: u8, I2C: BlockingI2C>
+impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C>
     SSD1306<'bus, Pin<P, N, Output<PushPull>>, I2C>
 {
     /// Creates SSD1306 driver
-    pub fn new(reset_pin: Pin<P, N, Output<PushPull>>, i2c: &'bus Mutex<RefCell<I2C>>) -> Self {
+    pub fn new(reset_pin: Pin<P, N, Output<PushPull>>, i2c: &'bus I2C) -> Self {
         Self {
             reset_pin: reset_pin,
             i2c,
             buffer: [0x40; BUFFER_SIZE + 1],
+            initialized: false,
+            fututre: None,
         }
     }
 
@@ -89,6 +96,8 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C>
         self.clear(BinaryColor::Off)?;
         self.send_image()?;
 
+        self.initialized = true;
+
         return Ok(());
     }
 
@@ -107,9 +116,19 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C>
     }
 
     pub fn swap(&mut self) {
-        while self.send_image().is_err() {
-            self.reset_position()
+        if let Some(f) = &self.fututre {
+            let res = f.ready();
+            if let Poll::Ready(r) = res {
+                if let Err(_) = r {
+                    self.reset_position();
+                }
+                self.fututre.take();
+            } else {
+                return;
+            }
         }
+
+        self.send_image();
     }
 
     fn reset_position(&mut self) {
@@ -127,31 +146,29 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C>
     }
 
     fn send_command(&mut self, cmd: u8) -> Result<(), OperationError> {
-        critical_section::with(|cs| {
-            let mut bus = self.i2c.borrow(cs).borrow_mut();
+        let future_res = self.i2c.write_async(I2C_ADDRESS, &[0x0, cmd]);
+        if future_res.is_err() {
+            return Err(OperationError::I2CError);
+        }
 
-            if let Err(_) = bus.write(I2C_ADDRESS, &[0x0, cmd]) {
-                return Err(OperationError::I2CError);
-            }
+        if let Err(_) = future_res.unwrap().block() {
+            return Err(OperationError::I2CError);
+        }
 
-            Ok(())
-        })
+        Ok(())
     }
 
     fn send_image(&mut self) -> Result<(), OperationError> {
-        critical_section::with(|cs| {
-            let mut bus = self.i2c.borrow(cs).borrow_mut();
+        self.fututre = self.i2c.write_async(I2C_ADDRESS, &self.buffer).ok();
+        Ok(())
+    }
 
-            if let Err(_) = bus.write(I2C_ADDRESS, &self.buffer) {
-                return Err(OperationError::I2CError);
-            }
-
-            Ok(())
-        })
+    pub fn initialized(&self) -> bool {
+        self.initialized
     }
 }
 
-impl<'bus, const P: char, const N: u8, I2C: BlockingI2C> Dimensions
+impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C> Dimensions
     for SSD1306<'bus, Pin<P, N, Output<PushPull>>, I2C>
 {
     fn bounding_box(&self) -> Rectangle {
@@ -165,7 +182,7 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C> Dimensions
     }
 }
 
-impl<'bus, const P: char, const N: u8, I2C: BlockingI2C> DrawTarget
+impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C> DrawTarget
     for SSD1306<'bus, Pin<P, N, Output<PushPull>>, I2C>
 {
     type Color = BinaryColor;

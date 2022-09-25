@@ -3,7 +3,7 @@ use core::cell::RefCell;
 use chrono::prelude::*;
 use critical_section::Mutex;
 
-use crate::i2c::BlockingI2C;
+use crate::i2c_async::NonBlockingI2C;
 
 const I2C_ADDRESS: u8 = 0b01101000;
 const REGISTER_COUNT: usize = 7;
@@ -29,12 +29,12 @@ pub enum Error {
 }
 
 #[derive(Debug)]
-pub struct DS3231<I2C: BlockingI2C + 'static> {
-    i2c: &'static Mutex<RefCell<I2C>>,
+pub struct DS3231<I2C: NonBlockingI2C + 'static> {
+    i2c: &'static I2C,
 }
 
-impl<I2C: BlockingI2C> DS3231<I2C> {
-    pub fn new(i2c: &'static Mutex<RefCell<I2C>>) -> Self {
+impl<I2C: NonBlockingI2C> DS3231<I2C> {
+    pub fn new(i2c: &'static I2C) -> Self {
         Self { i2c }
     }
 
@@ -70,34 +70,32 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
     fn read_registers(&self) -> Result<[u8; REGISTER_COUNT], Error> {
         let mut buf = [0_u8; REGISTER_COUNT];
 
-        critical_section::with(|cs| {
-            let mut bus = self.i2c.borrow(cs).borrow_mut();
+        let mut future_res = self.i2c.write_read_async(I2C_ADDRESS, &[0], &mut buf);
+        while let Err(_) = future_res {
+            future_res = self.i2c.write_read_async(I2C_ADDRESS, &[0], &mut buf);
+        }
 
-            if let Err(_) = bus.write_read(I2C_ADDRESS, &[0], &mut buf) {
-                return Err(Error::I2CError);
-            }
+        future_res.unwrap().block().ok();
 
-            Ok(buf)
-        })
+        Ok(buf)
     }
 
     fn write_registers(&self, regs: [u8; REGISTER_COUNT]) -> Result<(), Error> {
         let mut buf = [0_u8; REGISTER_COUNT + 1];
         buf[1..].copy_from_slice(&regs);
 
-        critical_section::with(|cs| {
-            let mut bus = self.i2c.borrow(cs).borrow_mut();
+        let mut future_res = self.i2c.write_async(I2C_ADDRESS, &buf);
+        while let Err(_) = future_res {
+            future_res = self.i2c.write_async(I2C_ADDRESS, &buf);
+        }
 
-            if let Err(_) = bus.write(I2C_ADDRESS, &buf) {
-                return Err(Error::I2CError);
-            }
+        future_res.unwrap().block().ok();
 
-            Ok(())
-        })
+        Ok(())
     }
 }
 
-impl<I2C: BlockingI2C> Clone for DS3231<I2C> {
+impl<I2C: NonBlockingI2C> Clone for DS3231<I2C> {
     fn clone(&self) -> Self {
         Self { i2c: self.i2c }
     }
