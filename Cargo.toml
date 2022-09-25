@@ -14,7 +14,6 @@ panic-halt = "0.2.0"
 embedded-graphics = {version = "0.7.1", git = "https://github.com/embedded-graphics/embedded-graphics.git"}
 chrono = {version = "0.4.22", default-features=false }
 critical-section = "1.1.1"
-static_cell = "1.0"
 spin = "0.9"
 atomic_enum = "0.2"
 heapless = "0.7.16"
@@ -34,3 +33,7 @@ opt-level = 'z'
 codegen-units = 1 # better optimizations
 debug = true # symbols are nice and they don't increase the size on Flash
 lto = true # better optimizations
+
+# Optimize dependencies in dev build
+[profile.dev.package."*"] 
+opt-level = "z"

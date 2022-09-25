@@ -40,30 +40,38 @@ use panic_halt as _;
 #[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4, SPI3])]
 mod app {
 
+    // Standart library imports
+    use core::cell::RefCell;
+
+    // Cortex specific
     use cortex_m::asm::wfi;
 
-    use embedded_graphics::pixelcolor::BinaryColor;
-
+    // HAL imports
     use hal::gpio::*;
+    use hal::i2c::I2c;
+    use hal::pac::I2C1;
     use hal::prelude::*;
     use hal::timer::MonoTimerUs;
 
+    // External helpers libraries
+    use critical_section::Mutex;
+    use embedded_graphics::pixelcolor::BinaryColor;
     use embedded_graphics::prelude::*;
     use spin::lock_api::RwLock;
 
+    // This crate exports
     use crate::app_state::prelude::*;
     use crate::buzzer::Buzzer;
-    use crate::i2c::init_i2c1;
-    use crate::i2c::I2c1HandleProtected;
-
     use crate::ds3231::DS3231;
-    use crate::i2c::I2c1Handle;
     use crate::joystick::*;
-
     use crate::ssd1306::SSD1306;
 
+    // Type defs
     pub type StopwatchTimer = crate::stopwatchtimer::StopwatchTimer<crate::pac::TIM2>;
     pub type CountdownTimer = crate::countdowntimer::CountdownTimer<crate::pac::TIM4>;
+
+    pub type I2c1Handle = I2c<I2C1, (PB8<AF4<OpenDrain>>, PB9<AF4<OpenDrain>>)>;
+    pub type I2c1HandleProtected = Mutex<RefCell<I2c1Handle>>;
 
     #[shared]
     struct Shared {
@@ -106,6 +114,7 @@ mod app {
     #[init(local = [
         _stopwatch: Option<StopwatchTimer> = None,
         _countdown: Option<CountdownTimer> = None,
+        _i2c_bus: Option<I2c1HandleProtected> = None,
     ])]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
@@ -134,20 +143,23 @@ mod app {
 
         // I2C bus init
         let gpiob = dp.GPIOB.split();
-        let i2c: &'static mut I2c1HandleProtected = init_i2c1(
-            dp.I2C1,
+        let i2c = dp.I2C1.i2c(
             (
                 gpiob.pb8.into_alternate_open_drain(),
                 gpiob.pb9.into_alternate_open_drain(),
             ),
+            400.kHz(),
             &clocks,
         );
 
+        *ctx.local._i2c_bus = Some(Mutex::new(RefCell::new(i2c)));
+        let i2c_bus_ref = ctx.local._i2c_bus.as_ref().unwrap();
+
         // Display and sensors
-        let mut display = SSD1306::new(gpioa.pa8.into_push_pull_output(), i2c);
+        let mut display = SSD1306::new(gpioa.pa8.into_push_pull_output(), i2c_bus_ref);
         display.init().expect("Display init failure");
 
-        let rtc = DS3231::new(i2c);
+        let rtc = DS3231::new(i2c_bus_ref);
         rtc.update_time().unwrap();
 
         // Configure buttons
