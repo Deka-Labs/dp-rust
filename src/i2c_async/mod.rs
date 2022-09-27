@@ -1,9 +1,10 @@
 mod futures;
+use cortex_m_semihosting::hprintln;
 pub use futures::I2COperationFuture;
 mod states;
 mod transaction;
 
-use core::{mem::transmute, sync::atomic::AtomicBool};
+use core::mem::transmute;
 
 use cortex_m::peripheral::NVIC;
 use hal::{
@@ -12,6 +13,7 @@ use hal::{
     rcc::Clocks,
     time::Hertz,
 };
+use heapless::spsc::Queue;
 
 use self::{
     states::State,
@@ -172,6 +174,7 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
         self.i2c.cr1.modify(|_, w| w.pe().set_bit());
     }
 
+    #[inline(always)]
     fn check_and_clear_error_flags(reg: &i2c1::RegisterBlock) -> Result<i2c1::sr1::R, Error> {
         // Note that flags should only be cleared once they have been registered. If flags are
         // cleared otherwise, there may be an inherent race condition and flags may be missed.
@@ -211,16 +214,19 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
         Ok(sr1)
     }
 
+    #[inline(always)]
     pub unsafe fn handle_event_interrupt() {
         let registers = { &*I2C1::ptr() };
         Self::handle_event_interrupt_impl(&registers);
     }
 
+    #[inline(always)]
     pub unsafe fn handle_error_interrupt() {
         let registers = { &*I2C1::ptr() };
         Self::handle_error_interrupt_impl(&registers);
     }
 
+    #[inline(always)]
     fn handle_event_interrupt_impl(reg: &i2c1::RegisterBlock) {
         {
             NVIC::unpend(hal::interrupt::I2C1_EV)
@@ -232,7 +238,7 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
         let reason = Self::event_interupt_reason(reg);
         match reason {
             I2CEventInterrupt::StartBitSent => {
-                ctx.state = State::StartGenerated;
+                *ctx.state_mut() = State::StartGenerated;
                 if ctx.is_read() {
                     Self::send_address(reg, ctx.address(), 1);
                 } else {
@@ -240,7 +246,7 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
                 }
             }
             I2CEventInterrupt::AddressSent => {
-                ctx.state = State::AddressSend;
+                *ctx.state_mut() = State::AddressSend;
                 // Clear condition by reading SR2
                 reg.sr2.read();
 
@@ -258,25 +264,27 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
             I2CEventInterrupt::DataByteTransferFinished => {
                 if ctx.is_read() {
                     // All bytes expect last
-                    if ctx.state == State::AddressSend {
-                        ctx.state = State::ByteProcesseing;
+                    if *ctx.state_mut() == State::AddressSend {
+                        *ctx.state_mut() = State::ByteProcesseing;
                     }
 
                     let btr = Self::recv_byte(reg);
                     ctx.set_byte_to_read(btr);
 
-                    if ctx.last_bytes_to_read() {
-                        // Don't send ack for last byte
-                        reg.cr1.modify(|_, w| w.ack().clear_bit());
-                        ctx.state = State::LastByte;
+                    if *ctx.state_mut() == State::LastByte {
+                        hprintln!("I2C Event IT Read Last");
+                        Self::command_ended(reg, ctx);
+                        return;
                     }
 
-                    if ctx.state == State::LastByte {
-                        Self::command_ended(reg, ctx);
+                    if ctx.last_bytes_to_read() {
+                        // Don't send ack for last byte
+                        reg.cr1.modify(|_, w| w.ack().clear_bit().stop().set_bit());
+                        *ctx.state_mut() = State::LastByte;
                     }
                 }
                 if ctx.is_write() {
-                    ctx.state = State::ByteProcesseing;
+                    *ctx.state_mut() = State::ByteProcesseing;
                     if let Some(btw) = ctx.byte_to_write() {
                         Self::send_byte(reg, btw);
                     } else {
@@ -288,14 +296,22 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
         }
     }
 
+    #[inline(always)]
     fn handle_error_interrupt_impl(reg: &i2c1::RegisterBlock) {
         {
             NVIC::unpend(hal::interrupt::I2C1_ER)
         }
+        hprintln!("I2C Error IT");
         let ctx = unsafe { &mut TRANSACTION };
 
         if let Err(e) = Self::check_and_clear_error_flags(reg) {
-            ctx.state = State::Fail(e);
+            *ctx.state_mut() = State::Fail(e);
+
+            // Skip current transaction and start next if any
+            if ctx.skip_transaction() {
+                hprintln!("I2C Error IT Generate Start");
+                Self::generate_start(reg)
+            }
         }
     }
 
@@ -323,17 +339,42 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
     }
 
     fn command_ended<const S: usize>(reg: &i2c1::RegisterBlock, ctx: &mut Transaction<S>) {
-        if ctx.next_command() {
-            // Reset state and start new command
-            ctx.state = State::Begin;
-            Self::generate_start(reg);
-        } else {
-            // We finished
-            Self::generate_stop(reg);
-            ctx.state = State::Finished;
+        if ctx.is_read() {
+            // Read always last command
 
-            NVIC::mask(hal::interrupt::I2C1_EV);
-            NVIC::mask(hal::interrupt::I2C1_ER);
+            // Wait for STOP condition to transmit.
+            while reg.cr1.read().stop().bit_is_set() {}
+
+            *ctx.state_mut() = State::Finished;
+
+            if ctx.skip_transaction() {
+                Self::generate_start(reg);
+            } else {
+                // Otherwise disable interupts
+                NVIC::mask(hal::interrupt::I2C1_EV);
+                NVIC::mask(hal::interrupt::I2C1_ER);
+            }
+        } else {
+            *ctx.state_mut() = State::Finished;
+
+            if ctx.next_command() {
+                // Reset state and start new command
+                *ctx.state_mut() = State::Begin;
+                Self::generate_start(reg);
+            } else {
+                // We finished (NoOp found)
+                Self::generate_stop(reg);
+
+                // Check if have commands after NoOp
+                // if yes, generate a new start
+                if ctx.have_more_commands() {
+                    Self::generate_start(reg);
+                } else {
+                    // Otherwise disable interupts
+                    NVIC::mask(hal::interrupt::I2C1_EV);
+                    NVIC::mask(hal::interrupt::I2C1_ER);
+                }
+            }
         }
     }
 
@@ -369,10 +410,10 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
         value
     }
 
-    #[inline(always)]
-    fn busy(&self) -> bool {
+    // Check is something is processing
+    fn working(&self) -> bool {
         let ctx = unsafe { &mut TRANSACTION };
-        !(ctx.finished() && ctx.future_read())
+        ctx.commands.len() != 0
     }
 }
 
@@ -383,10 +424,6 @@ impl<I2C: Instance, PINS> NonBlockingI2C for I2c<I2C, PINS> {
         to_send: &'b [u8],
         to_recv: &'b mut [u8],
     ) -> Result<I2COperationFuture, Error> {
-        if self.busy() {
-            return Err(Error::Busy);
-        }
-
         let ctx = unsafe { &mut TRANSACTION };
 
         let static_send: &'static [u8] = unsafe { transmute(to_send) };
@@ -395,61 +432,70 @@ impl<I2C: Instance, PINS> NonBlockingI2C for I2c<I2C, PINS> {
         let write_cmd = Command::Write(addr, static_send);
         let read_cmd = Command::Read(addr, static_recv);
 
-        *ctx = Transaction::new([write_cmd, read_cmd]);
+        critical_section::with(|_| {
+            let gen_start = !self.working();
 
-        self.enable_interupts();
-        Self::generate_start(&self.i2c);
-
-        Ok(I2COperationFuture::new(&ctx.future_readed))
+            match ctx.enqueue_commands([write_cmd, read_cmd]) {
+                Ok(f) => {
+                    if gen_start {
+                        self.enable_interupts();
+                        Self::generate_start(&self.i2c);
+                    }
+                    Ok(f)
+                }
+                Err(_) => Err(Error::Busy),
+            }
+        })
     }
 
     fn write_async<'b>(&self, addr: u8, to_send: &'b [u8]) -> Result<I2COperationFuture, Error> {
-        if self.busy() {
-            return Err(Error::Busy);
-        }
-
         let ctx = unsafe { &mut TRANSACTION };
 
         let static_send: &'static [u8] = unsafe { transmute(to_send) };
 
         let write_cmd = Command::Write(addr, static_send);
 
-        *ctx = Transaction::new([write_cmd]);
+        critical_section::with(|_| {
+            let gen_start = !self.working();
 
-        self.enable_interupts();
-        Self::generate_start(&self.i2c);
-
-        Ok(I2COperationFuture::new(&ctx.future_readed))
+            match ctx.enqueue_commands([write_cmd]) {
+                Ok(f) => {
+                    if gen_start {
+                        self.enable_interupts();
+                        Self::generate_start(&self.i2c);
+                    }
+                    Ok(f)
+                }
+                Err(_) => Err(Error::Busy),
+            }
+        })
     }
 
     fn read_async<'b>(&self, addr: u8, to_recv: &'b mut [u8]) -> Result<I2COperationFuture, Error> {
-        if self.busy() {
-            return Err(Error::Busy);
-        }
-
         let ctx = unsafe { &mut TRANSACTION };
 
         let static_recv: &'static mut [u8] = unsafe { transmute(to_recv) };
 
         let read_cmd = Command::Read(addr, static_recv);
 
-        *ctx = Transaction::new([read_cmd]);
+        critical_section::with(|_| {
+            let gen_start = !self.working();
 
-        self.enable_interupts();
-        Self::generate_start(&self.i2c);
-
-        Ok(I2COperationFuture::new(&ctx.future_readed))
+            match ctx.enqueue_commands([read_cmd]) {
+                Ok(f) => {
+                    if gen_start {
+                        self.enable_interupts();
+                        Self::generate_start(&self.i2c);
+                    }
+                    Ok(f)
+                }
+                Err(_) => Err(Error::Busy),
+            }
+        })
     }
 }
 
 unsafe impl<I2C: Instance, PINS> Send for I2c<I2C, PINS> {}
 unsafe impl<I2C: Instance, PINS> Sync for I2c<I2C, PINS> {}
 
-static mut TRANSACTION: Transaction<2> = Transaction {
-    commands: [None, None],
-    command_position: 0,
-    buffer_position: 0,
-    state: State::Finished,
-
-    future_readed: AtomicBool::new(true),
-};
+static mut TRANSACTION: Transaction<5> = Transaction::new();

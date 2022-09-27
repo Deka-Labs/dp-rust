@@ -1,6 +1,7 @@
 use core::cell::RefCell;
 
 use chrono::prelude::*;
+use cortex_m_semihosting::hprintln;
 use critical_section::Mutex;
 
 use crate::i2c_async::NonBlockingI2C;
@@ -70,12 +71,14 @@ impl<I2C: NonBlockingI2C> DS3231<I2C> {
     fn read_registers(&self) -> Result<[u8; REGISTER_COUNT], Error> {
         let mut buf = [0_u8; REGISTER_COUNT];
 
+        hprintln!("DS3231 Read Start");
         let mut future_res = self.i2c.write_read_async(I2C_ADDRESS, &[0], &mut buf);
         while let Err(_) = future_res {
             future_res = self.i2c.write_read_async(I2C_ADDRESS, &[0], &mut buf);
         }
 
-        future_res.unwrap().block().ok();
+        future_res.unwrap().block().unwrap();
+        hprintln!("DS3231 Read End");
 
         Ok(buf)
     }

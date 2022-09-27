@@ -2,6 +2,7 @@ use core::{cell::RefCell, task::Poll};
 
 use crate::i2c_async::I2COperationFuture;
 use cortex_m::asm::nop;
+use cortex_m_semihosting::hprintln;
 use critical_section::Mutex;
 use stm32f4xx_hal::gpio::{Output, Pin, PushPull};
 
@@ -31,6 +32,7 @@ pub struct SSD1306<'bus, PIN, I2C: NonBlockingI2C + 'bus> {
     initialized: bool,
 
     fututre: Option<I2COperationFuture>,
+    send_buffer: [u8; BUFFER_SIZE + 1],
 }
 
 impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C>
@@ -44,6 +46,7 @@ impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C>
             buffer: [0x40; BUFFER_SIZE + 1],
             initialized: false,
             fututre: None,
+            send_buffer: [0x40; BUFFER_SIZE + 1],
         }
     }
 
@@ -119,6 +122,7 @@ impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C>
         if let Some(f) = &self.fututre {
             let res = f.ready();
             if let Poll::Ready(r) = res {
+                hprintln!("SSD1306 Swap End");
                 if let Err(_) = r {
                     self.reset_position();
                 }
@@ -128,7 +132,7 @@ impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C>
             }
         }
 
-        self.send_image();
+        self.send_image().ok();
     }
 
     fn reset_position(&mut self) {
@@ -159,7 +163,12 @@ impl<'bus, const P: char, const N: u8, I2C: NonBlockingI2C>
     }
 
     fn send_image(&mut self) -> Result<(), OperationError> {
-        self.fututre = self.i2c.write_async(I2C_ADDRESS, &self.buffer).ok();
+        critical_section::with(|_| {
+            self.send_buffer.copy_from_slice(&self.buffer);
+        });
+
+        hprintln!("SSD1306 Swap start");
+        self.fututre = self.i2c.write_async(I2C_ADDRESS, &self.send_buffer).ok();
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 use super::Error;
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone, Copy)]
 pub enum State {
     /// A first state
     #[default]

@@ -6,22 +6,21 @@ use core::{
 use super::{Error, TRANSACTION};
 
 pub struct I2COperationFuture {
-    future_read: &'static AtomicBool,
+    position: usize,
 }
 
 impl I2COperationFuture {
-    pub fn new(future_read: &'static AtomicBool) -> Self {
-        Self { future_read }
+    pub fn new(position: usize) -> Self {
+        Self { position }
     }
 
     pub fn ready(&self) -> Poll<Result<(), Error>> {
         let ctx = unsafe { &mut TRANSACTION };
 
-        if ctx.finished() {
+        if ctx.finished(self.position) {
             use super::states::State;
-            self.future_read.store(true, Ordering::Relaxed);
 
-            return match ctx.state {
+            return match ctx.states[self.position] {
                 State::Fail(e) => Poll::Ready(Err(e)),
                 State::Finished => Poll::Ready(Ok(())),
                 _ => unreachable!(),

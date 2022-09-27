@@ -1,6 +1,7 @@
 use core::sync::atomic::AtomicBool;
 
-use super::states::State;
+use super::{states::State, I2COperationFuture};
+use heapless::spsc::Queue;
 
 #[derive(Debug, Default)]
 pub enum Command<'buf> {
@@ -34,6 +35,13 @@ impl<'buf> Command<'buf> {
         return false;
     }
 
+    pub fn is_noop(&self) -> bool {
+        if let Command::NoOp = self {
+            return true;
+        }
+        return false;
+    }
+
     pub fn write_buf(&self) -> &[u8] {
         assert!(self.is_write());
         if let Command::Write(_, b) = self {
@@ -52,60 +60,75 @@ impl<'buf> Command<'buf> {
 }
 
 pub struct Transaction<const MAX_COMMANDS: usize> {
-    pub(crate) commands: [Option<Command<'static>>; MAX_COMMANDS],
+    pub(crate) commands: Queue<Command<'static>, MAX_COMMANDS>,
 
-    pub(crate) command_position: usize,
     pub(crate) buffer_position: usize,
-    pub(crate) state: State,
 
-    pub(crate) future_readed: AtomicBool,
+    pub(crate) states: [State; MAX_COMMANDS],
+    state_position: usize,
 }
 
 impl<const MAX_COMMANDS: usize> Transaction<MAX_COMMANDS> {
-    pub fn new<const INPUT_CMD_SIZE: usize>(
-        mut commands: [Command<'static>; INPUT_CMD_SIZE],
-    ) -> Self {
-        // We cannot fill more commands than buffer capacity
-        assert!(INPUT_CMD_SIZE <= MAX_COMMANDS);
-        // Empty transactions is not allowed
-        assert!(INPUT_CMD_SIZE > 0);
-
-        let mut commands_option = [(); MAX_COMMANDS].map(|_| None);
-        for i in 0..INPUT_CMD_SIZE {
-            commands_option[i] = Some(core::mem::take(&mut commands[i]))
-        }
-
+    pub const fn new() -> Self {
         Self {
-            commands: commands_option,
-            command_position: 0,
+            commands: Queue::new(),
             buffer_position: 0,
-            state: State::Begin,
-
-            future_readed: AtomicBool::new(false),
+            states: [State::Begin; MAX_COMMANDS],
+            state_position: 0,
         }
     }
 
+    pub fn enqueue_commands<const IN_SIZE: usize>(
+        &mut self,
+        commands: [Command<'static>; IN_SIZE],
+    ) -> Result<I2COperationFuture, [Command<'static>; IN_SIZE]> {
+        // This is single producer queue so we should protect it
+        critical_section::with(|_| {
+            let avaiable_space = self.commands.capacity() - self.commands.len() + 1; // + 1 To insert NoOp command
+            if avaiable_space < IN_SIZE {
+                return Err(commands); // Not enough space
+            }
+
+            // If no commands is executing our position is cureent
+            let pos = if self.commands.len() == 0 {
+                self.state_position
+            } else {
+                self.get_next_state_position()
+            };
+
+            for c in commands {
+                self.commands.enqueue(c).ok();
+            }
+
+            self.commands.enqueue(Command::NoOp).ok();
+
+            self.states[pos] = State::Begin;
+            Ok(I2COperationFuture::new(pos))
+        })
+    }
+
+    fn get_next_state_position(&self) -> usize {
+        (self.state_position + 1) % MAX_COMMANDS
+    }
+
+    pub(crate) fn state_mut(&mut self) -> &mut State {
+        &mut self.states[self.state_position]
+    }
+
     pub fn address(&self) -> u8 {
-        if let Some(cmd) = &self.commands[self.command_position] {
+        if let Some(cmd) = self.command() {
             return cmd.address();
         }
         unreachable!()
     }
 
     pub fn command(&self) -> Option<&Command> {
-        if self.command_position < self.commands.len() {
-            return self.commands[self.command_position].as_ref();
-        }
-
-        None
+        self.commands.peek()
     }
 
     fn command_mut<'a>(&'a mut self) -> Option<&'a mut Command<'static>> {
-        if self.command_position < self.commands.len() {
-            return self.commands[self.command_position].as_mut();
-        }
-
-        None
+        let mut it = self.commands.iter_mut();
+        it.nth(0)
     }
 
     pub fn is_read(&self) -> bool {
@@ -178,26 +201,47 @@ impl<const MAX_COMMANDS: usize> Transaction<MAX_COMMANDS> {
     }
 
     pub fn next_command(&mut self) -> bool {
-        self.command_position += 1;
-        self.buffer_position = 0;
-        self.state = State::Begin;
-        self.command().is_some()
+        critical_section::with(|_| {
+            self.commands.dequeue();
+            self.buffer_position = 0;
+
+            if let Some(c) = self.command() {
+                if c.is_noop() {
+                    self.commands.dequeue(); // Remove NoOp command
+                    if let State::Fail(_) = *self.state_mut() {
+                        // Do not change failed state to finished
+                    } else {
+                        *self.state_mut() = State::Finished
+                    }
+                    self.state_position = self.get_next_state_position();
+                    return false;
+                }
+                return true;
+            }
+
+            return false;
+        })
     }
 
-    pub fn finished(&self) -> bool {
-        if let State::Fail(_) = self.state {
-            return true;
-        }
-
-        if let State::Finished = self.state {
-            return true;
-        }
-
-        return false;
+    pub fn have_more_commands(&self) -> bool {
+        self.commands.len() > 0
     }
 
-    pub fn future_read(&self) -> bool {
-        self.future_readed
-            .load(core::sync::atomic::Ordering::Relaxed)
+    pub fn skip_transaction(&mut self) -> bool {
+        // Skip until NoOp finded
+        while self.next_command() {
+            // Do nothing
+        }
+
+        self.have_more_commands()
+    }
+
+    pub fn finished(&self, pos: usize) -> bool {
+        let s = self.states[pos];
+        match s {
+            State::Fail(_) => true,
+            State::Finished => true,
+            _ => false,
+        }
     }
 }

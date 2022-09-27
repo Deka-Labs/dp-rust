@@ -256,15 +256,17 @@ impl Drawable for ClockState {
 
         // Draw time
         let mut buf: String<32> = Default::default();
-        let time = self.display_time.read();
-        write!(
-            &mut buf,
-            "{:02}:{:02}:{:02}",
-            time.hour(),
-            time.minute(),
-            time.second()
-        )
-        .unwrap();
+        critical_section::with(|_| {
+            let time = self.display_time.read();
+            write!(
+                &mut buf,
+                "{:02}:{:02}:{:02}",
+                time.hour(),
+                time.minute(),
+                time.second()
+            )
+            .unwrap();
+        });
 
         Text::with_alignment(
             &buf,
