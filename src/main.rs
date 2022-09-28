@@ -239,9 +239,9 @@ mod app {
     }
 
     /// Draw task draws content of `display_info` onto screen
-    #[task(local = [display], shared = [&app_state], priority = 3, capacity = 1)]
+    #[task(local = [display], shared = [&app_state], priority = 1, capacity = 1)]
     fn draw(ctx: draw::Context) {
-        draw::spawn_after(200.millis()).ok();
+        draw::spawn_after(100.millis()).ok();
 
         let display = ctx.local.display;
 
