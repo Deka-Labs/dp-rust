@@ -139,8 +139,6 @@ pub struct AppSharedState {
     content_style: MonoTextStyle<'static, BinaryColor>,
     small_text_style: MonoTextStyle<'static, BinaryColor>,
 
-    primitive_style: PrimitiveStyle<BinaryColor>,
-
     navigation_icons: NavigationDrawables,
 }
 
@@ -168,8 +166,6 @@ impl AppSharedState {
                 .font(&FONT_6X10)
                 .text_color(BinaryColor::On)
                 .build(),
-
-            primitive_style,
 
             navigation_icons: NavigationDrawables::new(&primitive_style),
         }

@@ -216,21 +216,32 @@ impl Drawable for ClockState {
         // Draw UI hints
 
         if is_edit {
-            let arrow = Triangle::new(
-                Point { x: 0, y: -4 },
-                Point { x: -2, y: 3 },
-                Point { x: 2, y: 3 },
-            )
-            .into_styled(self.state().primitive_style);
+            let y_above = 19;
+            let y_below = 40;
 
             let field = self.edit_field.load(Ordering::Relaxed);
-            let height = 40;
-            let pos = match field {
-                EditField::Hours => Point { x: 36, y: height },
-                EditField::Minutes => Point { x: 64, y: height },
+            let x_pos = match field {
+                EditField::Hours => 36,
+                EditField::Minutes => 64,
             };
 
-            arrow.translate(pos).draw(target)?;
+            self.state().navigation_icons.draw_icon(
+                target,
+                NavigationIcons::Up,
+                Point {
+                    x: x_pos,
+                    y: y_above,
+                },
+            )?;
+
+            self.state().navigation_icons.draw_icon(
+                target,
+                NavigationIcons::Down,
+                Point {
+                    x: x_pos,
+                    y: y_below,
+                },
+            )?;
         } else {
             self.draw_navigation(target)?;
         }
@@ -267,7 +278,7 @@ impl Drawable for ClockState {
 
         Text::with_alignment(
             &buf,
-            Point { x: 64, y: 32 },
+            Point { x: 64, y: 34 },
             self.state().content_style,
             Alignment::Center,
         )
