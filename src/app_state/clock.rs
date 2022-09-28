@@ -6,7 +6,6 @@ use chrono::{prelude::*, Duration};
 use embedded_graphics::{
     pixelcolor::BinaryColor,
     prelude::*,
-    primitives::Triangle,
     text::{Alignment, Text},
 };
 use heapless::String;

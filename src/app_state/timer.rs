@@ -3,7 +3,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use atomic_enum::atomic_enum;
 use chrono::Duration;
-use embedded_graphics::primitives::Triangle;
 use embedded_graphics::text::{Alignment, Text};
 use embedded_graphics::{pixelcolor::BinaryColor, prelude::*};
 use heapless::String;
