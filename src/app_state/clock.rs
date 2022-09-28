@@ -1,16 +1,16 @@
+use core::cell::Cell;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use atomic_enum::atomic_enum;
 use chrono::{prelude::*, Duration};
+use critical_section::Mutex;
 use embedded_graphics::{
     pixelcolor::BinaryColor,
     prelude::*,
     text::{Alignment, Text},
 };
 use heapless::String;
-
-use spin::lock_api::RwLock;
 
 use crate::{ds3231::DS3231, i2c::I2c1Handle, joystick::Joystick};
 
@@ -28,7 +28,7 @@ pub struct ClockState {
     state: Option<AppSharedState>,
 
     rtc: DS3231<I2c1Handle>,
-    display_time: RwLock<DateTime<Utc>>,
+    display_time: Mutex<Cell<DateTime<Utc>>>,
 
     edit_mode: AtomicBool,
     edit_field: AtomicEditField,
@@ -40,7 +40,7 @@ impl ClockState {
         Self {
             state: None,
             rtc: rtc.clone(),
-            display_time: RwLock::new(Default::default()),
+            display_time: Mutex::new(Cell::new(Default::default())),
 
             edit_mode: AtomicBool::new(false),
             edit_field: AtomicEditField::new(EditField::Hours),
@@ -66,9 +66,11 @@ impl ClockState {
                 }
                 Center => {
                     self.edit_mode.store(true, Ordering::Release);
-                    let mut dt = self.display_time.write();
-                    // After apply we want to start count seconds over
-                    *dt = dt.with_second(0).unwrap();
+                    critical_section::with(|cs| {
+                        let mut dt = self.display_time.borrow(cs);
+                        // After apply we want to start count seconds over
+                        dt.set(dt.get().with_second(0).unwrap());
+                    })
                 }
 
                 _ => {}
@@ -101,7 +103,10 @@ impl ClockState {
                 Right => self.edit_field_next(),
                 Center => {
                     // Set time and exit form edit mode
-                    self.rtc.set_time(*self.display_time.read()).unwrap();
+                    critical_section::with(|cs| {
+                        let dt = self.display_time.borrow(cs);
+                        self.rtc.set_time(dt.get()).unwrap();
+                    });
                     self.edit_mode.store(false, Ordering::Release);
                 }
             }
@@ -136,18 +141,27 @@ impl ClockState {
 
     /// Add rounded `edit_speed` value to current edit value
     fn edit_field_add(&self, speed: f32) {
-        match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => *self.display_time.write() += Duration::hours(speed as i64),
-            EditField::Minutes => *self.display_time.write() += Duration::minutes(speed as i64),
-        }
+        let edit_amount = match self.edit_field.load(Ordering::Relaxed) {
+            EditField::Hours => Duration::hours(speed as i64),
+            EditField::Minutes => Duration::minutes(speed as i64),
+        };
+
+        critical_section::with(|cs| {
+            let dt = self.display_time.borrow(cs);
+            dt.set(dt.get() + edit_amount);
+        });
     }
 
     /// Substract rounded `edit_speed` value to current edit value
     fn edit_field_sub(&self, speed: f32) {
-        match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => *self.display_time.write() -= Duration::hours(speed as i64),
-            EditField::Minutes => *self.display_time.write() -= Duration::minutes(speed as i64),
-        }
+        let edit_amount = match self.edit_field.load(Ordering::Relaxed) {
+            EditField::Hours => Duration::hours(speed as i64),
+            EditField::Minutes => Duration::minutes(speed as i64),
+        };
+        critical_section::with(|cs| {
+            let dt = self.display_time.borrow(cs);
+            dt.set(dt.get() - edit_amount);
+        });
     }
 
     /// Switch to next edit field
@@ -173,7 +187,10 @@ impl AppStateTrait for ClockState {
         self.state = Some(state);
 
         // Get time from RTC module
-        *self.display_time.write() = self.rtc.update_time().unwrap();
+        critical_section::with(|cs| {
+            let time = self.rtc.update_time().unwrap();
+            self.display_time.borrow(cs).set(time);
+        });
     }
 
     fn exit(&mut self) -> AppSharedState {
@@ -187,7 +204,10 @@ impl AppStateTrait for ClockState {
     fn tick(&self) {
         // On tick increment time if not in edit mode
         if !self.edit_mode.load(Ordering::Relaxed) {
-            *self.display_time.write() += Duration::seconds(1);
+            critical_section::with(|cs| {
+                let dt = self.display_time.borrow(cs);
+                dt.set(dt.get() + Duration::seconds(1))
+            });
         }
     }
 
@@ -265,7 +285,8 @@ impl Drawable for ClockState {
 
         // Draw time
         let mut buf: String<32> = Default::default();
-        let time = self.display_time.read();
+        let time = critical_section::with(|cs| self.display_time.borrow(cs).get());
+
         write!(
             &mut buf,
             "{:02}:{:02}:{:02}",
