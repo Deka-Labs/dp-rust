@@ -48,8 +48,6 @@ mod app {
 
     // HAL imports
     use hal::gpio::*;
-    use hal::i2c::I2c;
-    use hal::pac::I2C1;
     use hal::prelude::*;
     use hal::timer::MonoTimerUs;
 
@@ -58,11 +56,13 @@ mod app {
     use embedded_graphics::pixelcolor::BinaryColor;
     use embedded_graphics::prelude::*;
     use spin::lock_api::RwLock;
+    use stm32f4xx_hal::dma::StreamsTuple;
 
     // This crate exports
     use crate::app_state::prelude::*;
     use crate::buzzer::Buzzer;
     use crate::ds3231::DS3231;
+    use crate::i2c::I2c1Handle;
     use crate::joystick::*;
     use crate::ssd1306::SSD1306;
 
@@ -70,7 +70,6 @@ mod app {
     pub type StopwatchTimer = crate::stopwatchtimer::StopwatchTimer<crate::pac::TIM2>;
     pub type CountdownTimer = crate::countdowntimer::CountdownTimer<crate::pac::TIM4>;
 
-    pub type I2c1Handle = I2c<I2C1, (PB8<AF4<OpenDrain>>, PB9<AF4<OpenDrain>>)>;
     pub type I2c1HandleProtected = Mutex<RefCell<I2c1Handle>>;
 
     #[shared]
@@ -78,6 +77,8 @@ mod app {
         app_state: RwLock<AppState>,
         stopwatch: &'static StopwatchTimer,
         countdown: &'static CountdownTimer,
+
+        i2c: &'static I2c1HandleProtected,
     }
 
     #[local]
@@ -152,7 +153,11 @@ mod app {
             &clocks,
         );
 
-        *ctx.local._i2c_bus = Some(Mutex::new(RefCell::new(i2c)));
+        let streams = StreamsTuple::new(dp.DMA1);
+
+        let i2c_dma = i2c.use_dma(streams.1);
+        *ctx.local._i2c_bus = Some(Mutex::new(RefCell::new(i2c_dma)));
+
         let i2c_bus_ref = ctx.local._i2c_bus.as_ref().unwrap();
 
         // Display and sensors
@@ -186,6 +191,8 @@ mod app {
                 app_state,
                 stopwatch: ctx.local._stopwatch.as_ref().unwrap(),
                 countdown: ctx.local._countdown.as_ref().unwrap(),
+
+                i2c: i2c_bus_ref,
             },
             Local {
                 led,
@@ -232,9 +239,9 @@ mod app {
     }
 
     /// Draw task draws content of `display_info` onto screen
-    #[task(local = [display], shared = [&app_state], priority = 3, capacity = 1)]
+    #[task(local = [display], shared = [&app_state], priority = 1, capacity = 1)]
     fn draw(ctx: draw::Context) {
-        draw::spawn_after(200.millis()).ok();
+        draw::spawn_after(100.millis()).ok();
 
         let display = ctx.local.display;
 
@@ -285,5 +292,13 @@ mod app {
     #[task(binds = TIM4, shared = [&countdown], priority = 5)]
     fn tim_countdown_it(ctx: tim_countdown_it::Context) {
         ctx.shared.countdown.handle_it();
+    }
+
+    #[task(binds = DMA1_STREAM1, shared = [&i2c], priority = 7)]
+    fn i2c_dma_it(ctx: i2c_dma_it::Context) {
+        critical_section::with(|cs| {
+            let mut c = ctx.shared.i2c.borrow(cs).borrow_mut();
+            c.handle_interrupt();
+        })
     }
 }

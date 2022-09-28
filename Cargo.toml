@@ -21,6 +21,7 @@ heapless = "0.7.16"
 [dependencies.stm32f4xx-hal]
 version = "0.13.2"
 features = ["stm32f411", "rtic"]
+git = "https://github.com/SpeedCrash100/stm32f4xx-hal.git"
 
 # this lets you use `cargo fix`!
 [[bin]]
@@ -34,6 +35,5 @@ codegen-units = 1 # better optimizations
 debug = true # symbols are nice and they don't increase the size on Flash
 lto = true # better optimizations
 
-# Optimize dependencies in dev build
 [profile.dev.package."*"] 
 opt-level = "z"
