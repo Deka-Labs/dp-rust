@@ -67,7 +67,7 @@ impl ClockState {
                 Center => {
                     self.edit_mode.store(true, Ordering::Release);
                     critical_section::with(|cs| {
-                        let mut dt = self.display_time.borrow(cs);
+                        let dt = self.display_time.borrow(cs);
                         // After apply we want to start count seconds over
                         dt.set(dt.get().with_second(0).unwrap());
                     })
@@ -187,8 +187,8 @@ impl AppStateTrait for ClockState {
         self.state = Some(state);
 
         // Get time from RTC module
+        let time = self.rtc.update_time().unwrap();
         critical_section::with(|cs| {
-            let time = self.rtc.update_time().unwrap();
             self.display_time.borrow(cs).set(time);
         });
     }
