@@ -50,7 +50,6 @@ mod app {
     // Cortex specific
     use cortex_m::asm::wfi;
 
-    use cortex_m::peripheral::NVIC;
     // HAL imports
     use hal::gpio::*;
     use hal::pac::I2C1;
@@ -121,7 +120,7 @@ mod app {
         _countdown: Option<CountdownTimer> = None,
         _i2c_bus: Option<I2c1Handle> = None,
     ])]
-    fn init(mut ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+    fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         // Init clocks
         let dp = ctx.device;
 
@@ -154,7 +153,7 @@ mod app {
                 gpiob.pb8.into_alternate_open_drain(),
                 gpiob.pb9.into_alternate_open_drain(),
             ),
-            100.kHz(),
+            400.kHz(),
             &clocks,
         );
 
@@ -162,7 +161,7 @@ mod app {
         let i2c_bus_ref = ctx.local._i2c_bus.as_ref().unwrap();
 
         // Display and sensors
-        let mut display = SSD1306::new(gpioa.pa8.into_push_pull_output(), i2c_bus_ref);
+        let display = SSD1306::new(gpioa.pa8.into_push_pull_output(), i2c_bus_ref);
 
         let rtc = DS3231::new(i2c_bus_ref);
 

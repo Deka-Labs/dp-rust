@@ -114,6 +114,10 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
         // Make sure the I2C unit is disabled so we can configure it
         self.i2c.cr1.modify(|_, w| w.pe().clear_bit());
 
+        // Reset
+        self.i2c.cr1.modify(|_, w| w.swrst().set_bit());
+        self.i2c.cr1.modify(|_, w| w.swrst().clear_bit());
+
         // Calculate settings for I2C speed modes
         let clock = pclk.raw();
         let clc_mhz = clock / 1_000_000;
@@ -328,6 +332,17 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
 
     fn generate_start(reg: &i2c1::RegisterBlock) {
         reg.cr1.modify(|_, w| w.start().set_bit().ack().set_bit());
+        // Block until start generated
+        while reg.sr1.read().sb().bit_is_clear() {}
+        // And we're master
+        while {
+            let sr2 = reg.sr2.read();
+            sr2.msl().bit_is_clear() && sr2.busy().bit_is_clear()
+        } {}
+    }
+
+    fn generate_start_nb(reg: &i2c1::RegisterBlock) {
+        reg.cr1.modify(|_, w| w.start().set_bit().ack().set_bit());
     }
 
     fn generate_stop(reg: &i2c1::RegisterBlock) {
@@ -340,40 +355,25 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
 
     fn command_ended<const S: usize>(reg: &i2c1::RegisterBlock, ctx: &mut Transaction<S>) {
         if ctx.is_read() {
-            // Read always last command
-
-            // Wait for STOP condition to transmit.
-            while reg.cr1.read().stop().bit_is_set() {}
-
             *ctx.state_mut() = State::Finished;
 
-            if ctx.skip_transaction() {
-                Self::generate_start(reg);
-            } else {
-                // Otherwise disable interupts
-                NVIC::mask(hal::interrupt::I2C1_EV);
-                NVIC::mask(hal::interrupt::I2C1_ER);
-            }
+            // disable interupts
+            NVIC::mask(hal::interrupt::I2C1_EV);
+            NVIC::mask(hal::interrupt::I2C1_ER);
         } else {
             *ctx.state_mut() = State::Finished;
 
             if ctx.next_command() {
                 // Reset state and start new command
                 *ctx.state_mut() = State::Begin;
-                Self::generate_start(reg);
+                Self::generate_start_nb(reg);
             } else {
                 // We finished (NoOp found)
                 Self::generate_stop(reg);
 
-                // Check if have commands after NoOp
-                // if yes, generate a new start
-                if ctx.have_more_commands() {
-                    Self::generate_start(reg);
-                } else {
-                    // Otherwise disable interupts
-                    NVIC::mask(hal::interrupt::I2C1_EV);
-                    NVIC::mask(hal::interrupt::I2C1_ER);
-                }
+                //  disable interupts
+                NVIC::mask(hal::interrupt::I2C1_EV);
+                NVIC::mask(hal::interrupt::I2C1_ER);
             }
         }
     }
@@ -410,10 +410,11 @@ impl<I2C: Instance, PINS> I2c<I2C, PINS> {
         value
     }
 
-    // Check is something is processing
-    fn working(&self) -> bool {
-        let ctx = unsafe { &mut TRANSACTION };
-        ctx.commands.len() != 0
+    fn busy(&self) -> bool {
+        let sr2 = self.i2c.sr2.read();
+        let b = sr2.busy().bit_is_set();
+        let m = sr2.msl().bit_is_set();
+        b && m
     }
 }
 
@@ -424,72 +425,78 @@ impl<I2C: Instance, PINS> NonBlockingI2C for I2c<I2C, PINS> {
         to_send: &'b [u8],
         to_recv: &'b mut [u8],
     ) -> Result<I2COperationFuture, Error> {
-        let ctx = unsafe { &mut TRANSACTION };
-
-        let static_send: &'static [u8] = unsafe { transmute(to_send) };
-        let static_recv: &'static mut [u8] = unsafe { transmute(to_recv) };
-
-        let write_cmd = Command::Write(addr, static_send);
-        let read_cmd = Command::Read(addr, static_recv);
+        // Enable Interupts in advance it cannot be done in critical sections
+        self.enable_interupts();
 
         critical_section::with(|_| {
-            let gen_start = !self.working();
+            if self.busy() {
+                return Err(Error::Busy);
+            }
+
+            let ctx = unsafe { &mut TRANSACTION };
+
+            let static_send: &'static [u8] = unsafe { transmute(to_send) };
+            let static_recv: &'static mut [u8] = unsafe { transmute(to_recv) };
+
+            let write_cmd = Command::Write(addr, static_send);
+            let read_cmd = Command::Read(addr, static_recv);
 
             match ctx.enqueue_commands([write_cmd, read_cmd]) {
                 Ok(f) => {
-                    if gen_start {
-                        self.enable_interupts();
-                        Self::generate_start(&self.i2c);
-                    }
+                    Self::generate_start(&self.i2c);
                     Ok(f)
                 }
-                Err(_) => Err(Error::Busy),
+                Err(_) => unreachable!("Contex TRANSACTION must have space for all commands"),
             }
         })
     }
 
     fn write_async<'b>(&self, addr: u8, to_send: &'b [u8]) -> Result<I2COperationFuture, Error> {
-        let ctx = unsafe { &mut TRANSACTION };
-
-        let static_send: &'static [u8] = unsafe { transmute(to_send) };
-
-        let write_cmd = Command::Write(addr, static_send);
+        // Enable Interupts in advance it cannot be done in critical sections
+        self.enable_interupts();
 
         critical_section::with(|_| {
-            let gen_start = !self.working();
+            if self.busy() {
+                return Err(Error::Busy);
+            }
+
+            let ctx = unsafe { &mut TRANSACTION };
+
+            let static_send: &'static [u8] = unsafe { transmute(to_send) };
+
+            let write_cmd = Command::Write(addr, static_send);
 
             match ctx.enqueue_commands([write_cmd]) {
                 Ok(f) => {
-                    if gen_start {
-                        self.enable_interupts();
-                        Self::generate_start(&self.i2c);
-                    }
+                    Self::generate_start(&self.i2c);
                     Ok(f)
                 }
-                Err(_) => Err(Error::Busy),
+                Err(_) => unreachable!("Contex TRANSACTION must have space for all commands"),
             }
         })
     }
 
     fn read_async<'b>(&self, addr: u8, to_recv: &'b mut [u8]) -> Result<I2COperationFuture, Error> {
-        let ctx = unsafe { &mut TRANSACTION };
-
-        let static_recv: &'static mut [u8] = unsafe { transmute(to_recv) };
-
-        let read_cmd = Command::Read(addr, static_recv);
+        // Enable Interupts in advance it cannot be done in critical sections
+        self.enable_interupts();
 
         critical_section::with(|_| {
-            let gen_start = !self.working();
+            if self.busy() {
+                return Err(Error::Busy);
+            }
+
+            let ctx = unsafe { &mut TRANSACTION };
+
+            let static_recv: &'static mut [u8] = unsafe { transmute(to_recv) };
+
+            let read_cmd = Command::Read(addr, static_recv);
 
             match ctx.enqueue_commands([read_cmd]) {
                 Ok(f) => {
-                    if gen_start {
-                        self.enable_interupts();
-                        Self::generate_start(&self.i2c);
-                    }
+                    Self::generate_start(&self.i2c);
                     Ok(f)
                 }
-                Err(_) => Err(Error::Busy),
+                Err(_) => unreachable!("Contex TRANSACTION must have space for all commands"),
             }
         })
     }
