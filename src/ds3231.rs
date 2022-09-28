@@ -1,6 +1,7 @@
 use core::cell::RefCell;
 
 use chrono::prelude::*;
+
 use critical_section::Mutex;
 
 use crate::i2c::BlockingI2C;
@@ -26,6 +27,7 @@ enum HoursMasks {
 #[derive(Debug)]
 pub enum Error {
     I2CError,
+    Busy,
 }
 
 #[derive(Debug)]
@@ -39,7 +41,12 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
     }
 
     pub fn update_time(&self) -> Result<DateTime<Utc>, Error> {
-        let data = self.read_registers()?;
+        let mut res = self.read_registers();
+        while let Err(Error::Busy) = res {
+            res = self.read_registers();
+        }
+
+        let data = res.unwrap();
 
         let mut time: DateTime<Utc> = Default::default();
 
@@ -73,7 +80,10 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
         critical_section::with(|cs| {
             let mut bus = self.i2c.borrow(cs).borrow_mut();
 
-            if let Err(_) = bus.write_read(I2C_ADDRESS, &[0], &mut buf) {
+            if let Err(e) = bus.write_read(I2C_ADDRESS, &[0], &mut buf) {
+                if e == hal::i2c::Error::Busy {
+                    return Err(Error::Busy);
+                }
                 return Err(Error::I2CError);
             }
 
@@ -88,8 +98,10 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
         critical_section::with(|cs| {
             let mut bus = self.i2c.borrow(cs).borrow_mut();
 
-            if let Err(_) = bus.write(I2C_ADDRESS, &buf) {
-                return Err(Error::I2CError);
+            while let Err(e) = bus.write(I2C_ADDRESS, &buf) {
+                if e != hal::i2c::Error::Busy {
+                    return Err(Error::I2CError);
+                }
             }
 
             Ok(())

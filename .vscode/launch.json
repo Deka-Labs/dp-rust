@@ -19,7 +19,10 @@
             "configFiles": [
                 "${workspaceRoot}/openocd.cfg"
             ],
-            "svdFile": "${workspaceRoot}/.vscode/STM32F411.svd"
+            "svdFile": "${workspaceRoot}/.vscode/STM32F411.svd",
+            "preLaunchCommands": [
+                "monitor arm semihosting enable"
+            ]
         },
         {
             /* Configuration for the STM32F303 Discovery board */
@@ -34,7 +37,10 @@
             "configFiles": [
                 "${workspaceRoot}/openocd.cfg"
             ],
-            "svdFile": "${workspaceRoot}/.vscode/STM32F411.svd"
+            "svdFile": "${workspaceRoot}/.vscode/STM32F411.svd",
+            "preLaunchCommands": [
+                "monitor arm semihosting enable"
+            ]
         }
     ]
 }
