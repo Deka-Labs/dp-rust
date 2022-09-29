@@ -6,9 +6,10 @@ use core::{
 use cortex_m::asm::nop;
 
 use critical_section::Mutex;
+use nb;
 use stm32f4xx_hal::{
     gpio::{Output, Pin, PushPull},
-    i2c::I2CWriteDMA,
+    i2c::dma::I2CMasterWriteDMA,
 };
 
 use crate::i2c::BlockingI2C;
@@ -31,7 +32,7 @@ pub enum OperationError {
     Busy,
 }
 
-pub struct SSD1306<'bus, PIN, I2C: BlockingI2C + I2CWriteDMA + 'bus> {
+pub struct SSD1306<'bus, PIN, I2C: BlockingI2C + I2CMasterWriteDMA + 'bus> {
     reset_pin: PIN,
     i2c: &'bus Mutex<RefCell<I2C>>,
 
@@ -39,7 +40,7 @@ pub struct SSD1306<'bus, PIN, I2C: BlockingI2C + I2CWriteDMA + 'bus> {
     send_buffer: [u8; BUFFER_SIZE + 1], // Buffer used to send
 }
 
-impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CWriteDMA>
+impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CMasterWriteDMA>
     SSD1306<'bus, Pin<P, N, Output<PushPull>>, I2C>
 {
     /// Creates SSD1306 driver
@@ -147,7 +148,7 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CWriteDMA>
             let mut bus = self.i2c.borrow(cs).borrow_mut();
 
             if let Err(e) = bus.write(I2C_ADDRESS, &[0x0, cmd]) {
-                if e == hal::i2c::Error::Busy {
+                if e == nb::Error::WouldBlock {
                     return Err(OperationError::Busy);
                 }
                 return Err(OperationError::I2CError);
@@ -173,27 +174,25 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CWriteDMA>
             let mut bus = self.i2c.borrow(cs).borrow_mut();
 
             // Safe: self.send_buffer will live forever, because display itself 'static
-
             let result = unsafe { bus.write_dma(I2C_ADDRESS, &self.send_buffer, Some(callback)) };
 
-            match result {
-                Ok(_) => Ok(()),
-                Err(hal::i2c::Error::Busy) => {
-                    DRAWING.store(false, Ordering::Relaxed);
-                    Ok(())
-                }
-                Err(_) => {
-                    DRAWING.store(false, Ordering::Relaxed);
-                    Err(OperationError::I2CError)
+            if let Err(e) = result {
+                // Revert drawing state
+                DRAWING.store(false, Ordering::Relaxed);
+
+                if let nb::Error::Other(_) = e {
+                    return Err(OperationError::I2CError);
                 }
             }
+
+            Ok(())
         })?;
 
         Ok(())
     }
 }
 
-impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CWriteDMA> Dimensions
+impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CMasterWriteDMA> Dimensions
     for SSD1306<'bus, Pin<P, N, Output<PushPull>>, I2C>
 {
     fn bounding_box(&self) -> Rectangle {
@@ -207,7 +206,7 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CWriteDMA> Dimension
     }
 }
 
-impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CWriteDMA> DrawTarget
+impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CMasterWriteDMA> DrawTarget
     for SSD1306<'bus, Pin<P, N, Output<PushPull>>, I2C>
 {
     type Color = BinaryColor;

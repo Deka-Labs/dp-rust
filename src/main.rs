@@ -155,7 +155,7 @@ mod app {
 
         let streams = StreamsTuple::new(dp.DMA1);
 
-        let i2c_dma = i2c.use_dma(streams.1);
+        let i2c_dma = i2c.use_dma(streams.1, streams.0);
         *ctx.local._i2c_bus = Some(Mutex::new(RefCell::new(i2c_dma)));
 
         let i2c_bus_ref = ctx.local._i2c_bus.as_ref().unwrap();
@@ -298,7 +298,7 @@ mod app {
     fn i2c_dma_it(ctx: i2c_dma_it::Context) {
         critical_section::with(|cs| {
             let mut c = ctx.shared.i2c.borrow(cs).borrow_mut();
-            c.handle_interrupt();
+            c.handle_dma_interrupt();
         })
     }
 }
