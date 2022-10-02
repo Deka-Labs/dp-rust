@@ -13,10 +13,10 @@ pub struct Buzzer {
 
 impl Buzzer {
     pub fn new(timer: TIM3, pin: PA7, clocks: &Clocks) -> Self {
-        let pwm = timer.pwm_hz(pin.into_alternate(), 1.kHz(), clocks);
+        let pwm = timer.pwm_hz(pin.into_alternate(), 1.Hz(), clocks);
         let mut ch = pwm.split();
         let max_duty = ch.get_max_duty();
-        ch.set_duty(max_duty / 10);
+        ch.set_duty(max_duty / 2);
 
         Self {
             ch: RefCell::new(ch),
