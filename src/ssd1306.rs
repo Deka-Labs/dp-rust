@@ -6,7 +6,6 @@ use core::{
 use cortex_m::asm::nop;
 
 use critical_section::Mutex;
-use nb;
 use stm32f4xx_hal::{
     gpio::{Output, Pin, PushPull},
     i2c::dma::I2CMasterWriteDMA,
@@ -47,7 +46,7 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CMasterWriteDMA>
     pub fn new(reset_pin: Pin<P, N, Output<PushPull>>, i2c: &'bus Mutex<RefCell<I2C>>) -> Self {
         DRAWING.store(false, Ordering::Relaxed);
         Self {
-            reset_pin: reset_pin,
+            reset_pin,
             i2c,
             buffer: [0x40; BUFFER_SIZE + 1],
             send_buffer: [0x40; BUFFER_SIZE + 1],
@@ -102,7 +101,7 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CMasterWriteDMA>
 
         self.clear(BinaryColor::Off)?;
 
-        return Ok(());
+        Ok(())
     }
 
     #[inline(always)]
@@ -169,7 +168,7 @@ impl<'bus, const P: char, const N: u8, I2C: BlockingI2C + I2CMasterWriteDMA>
 
         self.send_buffer.copy_from_slice(&self.buffer);
 
-        let _r = critical_section::with(|cs| {
+        critical_section::with(|cs| {
             DRAWING.store(true, Ordering::Relaxed);
             let mut bus = self.i2c.borrow(cs).borrow_mut();
 

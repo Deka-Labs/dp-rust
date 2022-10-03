@@ -1,9 +1,7 @@
+use hal::dma::{Stream0, Stream1};
 use hal::gpio::{OpenDrain, AF4, PB8, PB9};
 use hal::i2c::{dma::I2CMasterDma, Error};
-use hal::pac::I2C1;
-use nb;
-use stm32f4xx_hal::dma::{Stream0, Stream1};
-use stm32f4xx_hal::pac::DMA1;
+use hal::pac::{DMA1, I2C1};
 
 pub type I2c1Handle = I2CMasterDma<
     I2C1,

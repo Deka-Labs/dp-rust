@@ -3,7 +3,6 @@ use core::cell::RefCell;
 use chrono::prelude::*;
 
 use critical_section::Mutex;
-use nb;
 
 use crate::i2c::BlockingI2C;
 
@@ -73,9 +72,7 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
         critical_section::with(|cs| {
             let mut bus = self.i2c.borrow(cs).borrow_mut();
 
-            if let Err(e) = bus.write_read(I2C_ADDRESS, &[0], &mut buf) {
-                return Err(e);
-            }
+            bus.write_read(I2C_ADDRESS, &[0], &mut buf)?;
 
             Ok(buf)
         })
@@ -103,7 +100,7 @@ fn bcd_to_decimal(bcd: u8) -> u8 {
 }
 
 fn decimal_to_bcd(d: u8) -> u8 {
-    (d / 10 << 4) | d % 10
+    ((d / 10) << 4) | (d % 10)
 }
 
 fn hours_to_decimal(bcd: u8) -> u8 {
@@ -119,5 +116,5 @@ fn hours_to_decimal(bcd: u8) -> u8 {
         }
     }
 
-    return bcd_to_decimal(bcd & !(HoursMasks::H12_24 as u8));
+    bcd_to_decimal(bcd & !(HoursMasks::H12_24 as u8))
 }

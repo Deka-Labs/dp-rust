@@ -29,14 +29,14 @@ impl NavigationDrawables {
     pub fn new(style: &PrimitiveStyle<BinaryColor>) -> Self {
         Self {
             up: Triangle::new(Point::new(0, -3), Point::new(3, 3), Point::new(-3, 3))
-                .into_styled(style.clone()),
+                .into_styled(*style),
             down: Triangle::new(Point::new(0, 3), Point::new(3, -3), Point::new(-3, -3))
-                .into_styled(style.clone()),
+                .into_styled(*style),
             left: Triangle::new(Point::new(-3, 0), Point::new(3, 3), Point::new(3, -3))
-                .into_styled(style.clone()),
+                .into_styled(*style),
             right: Triangle::new(Point::new(3, 0), Point::new(-3, 3), Point::new(-3, -3))
-                .into_styled(style.clone()),
-            center: Rectangle::new(Point::new(-3, -3), Size::new(6, 6)).into_styled(style.clone()),
+                .into_styled(*style),
+            center: Rectangle::new(Point::new(-3, -3), Size::new(6, 6)).into_styled(*style),
         }
     }
 

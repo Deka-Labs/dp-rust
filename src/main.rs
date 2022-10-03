@@ -69,8 +69,16 @@ mod app {
     // Type defs
     pub type StopwatchTimer = crate::stopwatchtimer::StopwatchTimer<crate::pac::TIM2>;
     pub type CountdownTimer = crate::countdowntimer::CountdownTimer<crate::pac::TIM4>;
-
     pub type I2c1HandleProtected = Mutex<RefCell<I2c1Handle>>;
+
+    pub type UpButton = ButtonPullUp<PA1>;
+    pub type DownButton = ButtonPullUp<PC0>;
+    pub type LeftButton = ButtonPullUp<PB0>;
+    pub type RightButton = ButtonPullUp<PA4>;
+    pub type CenterButton = ButtonPullUp<PC1>;
+
+    pub type JoystickImpl =
+        AccessoryShieldJoystick<UpButton, DownButton, LeftButton, RightButton, CenterButton>;
 
     #[shared]
     struct Shared {
@@ -93,13 +101,7 @@ mod app {
         rtc: DS3231<I2c1Handle>,
 
         /// Handles input
-        joy: AccessoryShieldJoystick<
-            ButtonPullUp<Pin<'A', 1>>,
-            ButtonPullUp<Pin<'C', 0>>,
-            ButtonPullUp<Pin<'B', 0>>,
-            ButtonPullUp<Pin<'A', 4>>,
-            ButtonPullUp<Pin<'C', 1>>,
-        >,
+        joy: JoystickImpl,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -264,6 +266,7 @@ mod app {
     fn change_state(ctx: change_state::Context, next: bool) {
         let mut cur_state = ctx.shared.app_state.write();
 
+        let rtc = ctx.local.rtc;
         let stopwatch = ctx.shared.stopwatch;
         let countdown = ctx.shared.countdown;
 
@@ -271,12 +274,12 @@ mod app {
             match *cur_state {
                 AppState::Clock(_) => cur_state.switch(TimerState::new(countdown)),
                 AppState::Timer(_) => cur_state.switch(StopwatchState::new(stopwatch)),
-                AppState::Stopwatch(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
+                AppState::Stopwatch(_) => cur_state.switch(ClockState::new(rtc)),
             };
         } else {
             match *cur_state {
                 AppState::Clock(_) => cur_state.switch(StopwatchState::new(stopwatch)),
-                AppState::Timer(_) => cur_state.switch(ClockState::new(&ctx.local.rtc)),
+                AppState::Timer(_) => cur_state.switch(ClockState::new(rtc)),
                 AppState::Stopwatch(_) => cur_state.switch(TimerState::new(countdown)),
             };
         }
