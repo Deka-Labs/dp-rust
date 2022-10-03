@@ -301,4 +301,12 @@ mod app {
             c.handle_dma_interrupt();
         })
     }
+
+    #[task(binds = I2C1_ER, shared = [&i2c], priority = 7)]
+    fn i2c_er_it(ctx: i2c_er_it::Context) {
+        critical_section::with(|cs| {
+            let mut c = ctx.shared.i2c.borrow(cs).borrow_mut();
+            c.handle_error_interrupt();
+        })
+    }
 }
