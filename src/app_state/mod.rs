@@ -13,9 +13,8 @@ pub mod prelude {
     pub use super::stopwatch::StopwatchState;
     pub use super::timer::TimerState;
 
-    pub use super::switch::SwitchState;
     pub use super::AppSharedState;
-    pub use super::AppState;
+    pub use super::AppStateHolder;
     pub use super::AppStateTrait;
 }
 
@@ -31,50 +30,85 @@ use stopwatch::StopwatchState;
 mod timer;
 use timer::TimerState;
 
-/// Switch trait for specify mode switching
-mod switch;
-use switch::SwitchState;
-
 /// Basic primitives for drawing navigation hints
 mod navigation;
 use navigation::{NavigationDrawables, NavigationIcons};
 
-/// Current app state holder
-pub enum AppState {
-    Clock(ClockState),
-    Timer(TimerState),
-    Stopwatch(StopwatchState),
+/// Macro for using in [AppStateHolder] to run state method
+macro_rules! run_state_func {
+    ($holder: expr, $function: ident) => {
+        match $holder.state {
+            AppState::Clock => $holder.clock_state.$function(),
+            AppState::Stopwatch => $holder.stopwatch_state.$function(),
+            AppState::Timer => $holder.timer_state.$function(),
+        }
+    };
+
+    ($holder: expr, $function: ident, $arg: expr) => {
+        match $holder.state {
+            AppState::Clock => $holder.clock_state.$function($arg),
+            AppState::Stopwatch => $holder.stopwatch_state.$function($arg),
+            AppState::Timer => $holder.timer_state.$function($arg),
+        }
+    };
 }
 
-/// Allow switch to clock state
-impl SwitchState<ClockState> for AppState {
-    fn switch(&mut self, new_state: ClockState) {
-        let state = self.exit();
-        *self = AppState::Clock(new_state);
-        self.enter(state)
+/// Current app states
+enum AppState {
+    Clock,
+    Timer,
+    Stopwatch,
+}
+
+pub struct AppStateHolder {
+    state: AppState,
+    clock_state: ClockState,
+    timer_state: TimerState,
+    stopwatch_state: StopwatchState,
+}
+
+impl AppStateHolder {
+    pub fn new(
+        mut clock: ClockState,
+        timer: TimerState,
+        stopwatch: StopwatchState,
+        shared_state: AppSharedState,
+    ) -> Self {
+        clock.enter(shared_state);
+
+        Self {
+            state: AppState::Clock,
+            clock_state: clock,
+            timer_state: timer,
+            stopwatch_state: stopwatch,
+        }
     }
-}
 
-/// Allow switch to timer state
-impl SwitchState<TimerState> for AppState {
-    fn switch(&mut self, new_state: TimerState) {
-        let state = self.exit();
-        *self = AppState::Timer(new_state);
-        self.enter(state)
+    /// Switch to next state
+    pub fn next(&mut self) {
+        let shared_state = self.exit();
+        self.state = match self.state {
+            AppState::Clock => AppState::Stopwatch,
+            AppState::Stopwatch => AppState::Timer,
+            AppState::Timer => AppState::Clock,
+        };
+        self.enter(shared_state);
     }
-}
 
-/// Allow switch to stopwatch state
-impl SwitchState<StopwatchState> for AppState {
-    fn switch(&mut self, new_state: StopwatchState) {
-        let state = self.exit();
-        *self = AppState::Stopwatch(new_state);
-        self.enter(state)
+    /// Switch to previous state
+    pub fn prev(&mut self) {
+        let shared_state = self.exit();
+        self.state = match self.state {
+            AppState::Clock => AppState::Timer,
+            AppState::Stopwatch => AppState::Clock,
+            AppState::Timer => AppState::Stopwatch,
+        };
+        self.enter(shared_state);
     }
 }
 
 /// Composite Drawable implementation
-impl Drawable for AppState {
+impl Drawable for AppStateHolder {
     type Color = BinaryColor;
     type Output = ();
 
@@ -82,54 +116,30 @@ impl Drawable for AppState {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        match self {
-            AppState::Clock(s) => s.draw(target),
-            AppState::Stopwatch(s) => s.draw(target),
-            AppState::Timer(s) => s.draw(target),
-        }
+        run_state_func!(self, draw, target)
     }
 }
 
 /// Composite AppStateTrait
-impl AppStateTrait for AppState {
+impl AppStateTrait for AppStateHolder {
     fn enter(&mut self, state: AppSharedState) {
-        match self {
-            AppState::Clock(s) => s.enter(state),
-            AppState::Stopwatch(s) => s.enter(state),
-            AppState::Timer(s) => s.enter(state),
-        }
+        run_state_func!(self, enter, state)
     }
 
     fn exit(&mut self) -> AppSharedState {
-        match self {
-            AppState::Clock(s) => s.exit(),
-            AppState::Stopwatch(s) => s.exit(),
-            AppState::Timer(s) => s.exit(),
-        }
+        run_state_func!(self, exit)
     }
 
     fn state(&self) -> &AppSharedState {
-        match self {
-            AppState::Clock(s) => s.state(),
-            AppState::Stopwatch(s) => s.state(),
-            AppState::Timer(s) => s.state(),
-        }
+        run_state_func!(self, state)
     }
 
     fn tick(&self) {
-        match self {
-            AppState::Clock(s) => s.tick(),
-            AppState::Stopwatch(s) => s.tick(),
-            AppState::Timer(s) => s.tick(),
-        }
+        run_state_func!(self, tick)
     }
 
     fn handle_input<J: Joystick>(&self, joystick: &J) {
-        match self {
-            AppState::Clock(s) => s.handle_input(joystick),
-            AppState::Stopwatch(s) => s.handle_input(joystick),
-            AppState::Timer(s) => s.handle_input(joystick),
-        }
+        run_state_func!(self, handle_input, joystick)
     }
 }
 
@@ -142,10 +152,9 @@ pub struct AppSharedState {
     navigation_icons: NavigationDrawables,
 }
 
-impl AppSharedState {
-    pub fn new() -> Self {
-        use embedded_graphics::mono_font::iso_8859_5::FONT_6X10;
-        use embedded_graphics::mono_font::iso_8859_5::FONT_9X15_BOLD;
+impl Default for AppSharedState {
+    fn default() -> Self {
+        use embedded_graphics::mono_font::iso_8859_5::{FONT_6X10, FONT_9X15_BOLD};
 
         let primitive_style = PrimitiveStyleBuilder::new()
             .stroke_width(1)

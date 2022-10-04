@@ -36,10 +36,10 @@ pub struct ClockState {
 }
 
 impl ClockState {
-    pub fn new(rtc: &DS3231<I2c1Handle>) -> Self {
+    pub fn new(rtc: DS3231<I2c1Handle>) -> Self {
         Self {
             state: None,
-            rtc: rtc.clone(),
+            rtc,
             display_time: Mutex::new(Cell::new(Default::default())),
 
             edit_mode: AtomicBool::new(false),

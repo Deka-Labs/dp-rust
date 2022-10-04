@@ -82,7 +82,7 @@ mod app {
 
     #[shared]
     struct Shared {
-        app_state: RwLock<AppState>,
+        app_state: RwLock<AppStateHolder>,
         stopwatch: &'static StopwatchTimer,
         countdown: &'static CountdownTimer,
 
@@ -96,9 +96,6 @@ mod app {
 
         /// Used in `draw`
         display: SSD1306<'static, PA8<Output<PushPull>>, I2c1Handle>,
-
-        /// Used to passthrough in ClockState in `change_state`
-        rtc: DS3231<I2c1Handle>,
 
         /// Handles input
         joy: JoystickImpl,
@@ -133,12 +130,15 @@ mod app {
         let buzzer = Buzzer::new(dp.TIM3, gpioa.pa7, &clocks);
 
         *ctx.local._stopwatch = Some(StopwatchTimer::new(dp.TIM2, hal::interrupt::TIM2, &clocks));
+        let stopwatch_ref = ctx.local._stopwatch.as_ref().unwrap();
+
         *ctx.local._countdown = Some(CountdownTimer::new(
             dp.TIM4,
             hal::interrupt::TIM4,
             buzzer,
             &clocks,
         ));
+        let countdown_ref = ctx.local._countdown.as_ref().unwrap();
 
         // LED indicator
 
@@ -180,8 +180,16 @@ mod app {
 
         let joy = AccessoryShieldJoystick::new(up, down, left, right, center);
 
-        let app_state = RwLock::new(AppState::Clock(ClockState::new(&rtc)));
-        app_state.write().enter(AppSharedState::new());
+        let clock_state = ClockState::new(rtc);
+        let stopwatch_state = StopwatchState::new(stopwatch_ref);
+        let timer_state = TimerState::new(countdown_ref);
+
+        let app_state = RwLock::new(AppStateHolder::new(
+            clock_state,
+            timer_state,
+            stopwatch_state,
+            AppSharedState::default(),
+        ));
 
         // Spawn repeating tasks
         draw::spawn().unwrap();
@@ -191,17 +199,12 @@ mod app {
         (
             Shared {
                 app_state,
-                stopwatch: ctx.local._stopwatch.as_ref().unwrap(),
-                countdown: ctx.local._countdown.as_ref().unwrap(),
+                stopwatch: stopwatch_ref,
+                countdown: countdown_ref,
 
                 i2c: i2c_bus_ref,
             },
-            Local {
-                led,
-                display,
-                rtc,
-                joy,
-            },
+            Local { led, display, joy },
             init::Monotonics(mono),
         )
     }
@@ -262,26 +265,14 @@ mod app {
 
     /// Task for switch next state
     /// Should be lowest priority
-    #[task(priority = 1, local=[rtc], shared = [&app_state, &stopwatch, &countdown])]
+    #[task(priority = 1, local=[], shared = [&app_state])]
     fn change_state(ctx: change_state::Context, next: bool) {
         let mut cur_state = ctx.shared.app_state.write();
 
-        let rtc = ctx.local.rtc;
-        let stopwatch = ctx.shared.stopwatch;
-        let countdown = ctx.shared.countdown;
-
         if next {
-            match *cur_state {
-                AppState::Clock(_) => cur_state.switch(TimerState::new(countdown)),
-                AppState::Timer(_) => cur_state.switch(StopwatchState::new(stopwatch)),
-                AppState::Stopwatch(_) => cur_state.switch(ClockState::new(rtc)),
-            };
+            cur_state.next();
         } else {
-            match *cur_state {
-                AppState::Clock(_) => cur_state.switch(StopwatchState::new(stopwatch)),
-                AppState::Timer(_) => cur_state.switch(ClockState::new(rtc)),
-                AppState::Stopwatch(_) => cur_state.switch(TimerState::new(countdown)),
-            };
+            cur_state.prev();
         }
     }
 
