@@ -25,6 +25,45 @@ enum EditField {
     Minutes,
 }
 
+impl AtomicEditField {
+    fn next(&self) {
+        let new_field = match self.load(Ordering::Acquire) {
+            EditField::Hours => EditField::Minutes,
+            EditField::Minutes => EditField::Hours,
+        };
+
+        self.store(new_field, Ordering::Release);
+    }
+
+    fn prev(&self) {
+        // will work only with 2 fields
+        self.next();
+    }
+
+    fn edit_duration(&self) -> Duration {
+        match self.load(Ordering::Relaxed) {
+            EditField::Hours => Duration::hours(1),
+            EditField::Minutes => Duration::minutes(1),
+        }
+    }
+
+    fn time_add(&self, time: &Mutex<Cell<DateTime<Utc>>>) {
+        let edit_amount = self.edit_duration();
+        critical_section::with(|cs| {
+            let dt = time.borrow(cs);
+            dt.set(dt.get() + edit_amount);
+        });
+    }
+
+    fn time_sub(&self, time: &Mutex<Cell<DateTime<Utc>>>) {
+        let edit_amount = self.edit_duration();
+        critical_section::with(|cs| {
+            let dt = time.borrow(cs);
+            dt.set(dt.get() - edit_amount);
+        });
+    }
+}
+
 pub struct ClockState {
     state: Option<AppSharedState>,
 
@@ -96,13 +135,13 @@ impl ClockState {
 
             match pos {
                 // Up pressed
-                Up => self.edit_field_add(1.0),
+                Up => self.edit_field.time_add(&self.display_time),
                 // Down pressed
-                Down => self.edit_field_sub(1.0),
+                Down => self.edit_field.time_sub(&self.display_time),
                 // Left pressed
-                Left => self.edit_field_prev(),
+                Left => self.edit_field.prev(),
                 // Right pressed
-                Right => self.edit_field_next(),
+                Right => self.edit_field.next(),
                 Center => {
                     // Set time and exit form edit mode
                     critical_section::with(|cs| {
@@ -121,13 +160,9 @@ impl ClockState {
             self.edit_speed.execute(|| {
                 match pos {
                     // Up pressed
-                    Up => {
-                        self.edit_field_add(1.0);
-                    }
+                    Up => self.edit_field.time_add(&self.display_time),
                     // Down pressed
-                    Down => {
-                        self.edit_field_sub(1.0);
-                    }
+                    Down => self.edit_field.time_sub(&self.display_time),
                     _ => {}
                 }
             });
@@ -139,47 +174,6 @@ impl ClockState {
             self.edit_speed.reset();
             self.edit_acceleration.reset();
         }
-    }
-
-    /// Add rounded `edit_speed` value to current edit value
-    fn edit_field_add(&self, speed: f32) {
-        let edit_amount = match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => Duration::hours(speed as i64),
-            EditField::Minutes => Duration::minutes(speed as i64),
-        };
-
-        critical_section::with(|cs| {
-            let dt = self.display_time.borrow(cs);
-            dt.set(dt.get() + edit_amount);
-        });
-    }
-
-    /// Substract rounded `edit_speed` value to current edit value
-    fn edit_field_sub(&self, speed: f32) {
-        let edit_amount = match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => Duration::hours(speed as i64),
-            EditField::Minutes => Duration::minutes(speed as i64),
-        };
-        critical_section::with(|cs| {
-            let dt = self.display_time.borrow(cs);
-            dt.set(dt.get() - edit_amount);
-        });
-    }
-
-    /// Switch to next edit field
-    fn edit_field_next(&self) {
-        let new_field = match self.edit_field.load(Ordering::Acquire) {
-            EditField::Hours => EditField::Minutes,
-            EditField::Minutes => EditField::Hours,
-        };
-
-        self.edit_field.store(new_field, Ordering::Release);
-    }
-
-    /// Switch to previous edit field
-    fn edit_field_prev(&self) {
-        // will work only with 2 fields
-        self.edit_field_next();
     }
 }
 

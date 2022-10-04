@@ -36,6 +36,61 @@ enum EditField {
     Seconds,
 }
 
+impl AtomicEditField {
+    fn next(&self) {
+        let new_field = match self.load(Ordering::Acquire) {
+            EditField::Hours => EditField::Minutes,
+            EditField::Minutes => EditField::Seconds,
+            EditField::Seconds => EditField::Hours,
+        };
+
+        self.store(new_field, Ordering::Release);
+    }
+
+    fn prev(&self) {
+        let new_field = match self.load(Ordering::Acquire) {
+            EditField::Hours => EditField::Seconds,
+            EditField::Minutes => EditField::Hours,
+            EditField::Seconds => EditField::Minutes,
+        };
+
+        self.store(new_field, Ordering::Release);
+    }
+
+    fn edit_amount(&self) -> u32 {
+        match self.load(Ordering::Relaxed) {
+            EditField::Hours => 60 * 60,
+            EditField::Minutes => 60,
+            EditField::Seconds => 1,
+        }
+    }
+
+    fn countdown_add(&self, c: &AtomicU32) {
+        let to_add = self.edit_amount();
+
+        let mut counter = c.load(Ordering::Acquire);
+        let diff = MAX_TIMER_COUNTDOWN - counter;
+        if diff > to_add {
+            counter += to_add;
+        } else {
+            counter = MAX_TIMER_COUNTDOWN;
+        }
+        c.store(counter, Ordering::Release);
+    }
+
+    fn countdown_sub(&self, c: &AtomicU32) {
+        let to_sub = self.edit_amount();
+
+        let mut counter = c.load(Ordering::Acquire);
+        if counter > to_sub {
+            counter -= to_sub;
+        } else {
+            counter = 0;
+        }
+        c.store(counter, Ordering::Release);
+    }
+}
+
 pub struct TimerState {
     state: Option<AppSharedState>,
     timer: &'static CountdownTimer,
@@ -107,13 +162,13 @@ impl TimerState {
 
             match pos {
                 // Up pressed
-                Up => self.edit_field_add(1.0),
+                Up => self.edit_field.countdown_add(&self.countdown_selected),
                 // Down pressed
-                Down => self.edit_field_sub(1.0),
+                Down => self.edit_field.countdown_sub(&self.countdown_selected),
                 // Left pressed
-                Left => self.edit_field_prev(),
+                Left => self.edit_field.prev(),
                 // Right pressed
-                Right => self.edit_field_next(),
+                Right => self.edit_field.next(),
                 Center => {
                     self.timer
                         .start(self.countdown_selected.load(Ordering::Relaxed));
@@ -131,13 +186,9 @@ impl TimerState {
             self.edit_speed.execute(|| {
                 match pos {
                     // Up pressed
-                    Up => {
-                        self.edit_field_add(1.0);
-                    }
+                    Up => self.edit_field.countdown_add(&self.countdown_selected),
                     // Down pressed
-                    Down => {
-                        self.edit_field_sub(1.0);
-                    }
+                    Down => self.edit_field.countdown_sub(&self.countdown_selected),
                     _ => {}
                 }
             });
@@ -177,63 +228,6 @@ impl TimerState {
                 _ => {}
             }
         }
-    }
-
-    /// Add rounded `edit_speed` value to current edit value
-    fn edit_field_add(&self, speed: f32) {
-        let to_add = match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => 60 * 60 * speed as u32,
-            EditField::Minutes => 60 * speed as u32,
-            EditField::Seconds => speed as u32,
-        };
-
-        let mut counter = self.countdown_selected.load(Ordering::Acquire);
-        let diff = MAX_TIMER_COUNTDOWN - counter;
-        if diff > to_add {
-            counter += to_add;
-        } else {
-            counter = MAX_TIMER_COUNTDOWN;
-        }
-        self.countdown_selected.store(counter, Ordering::Release);
-    }
-
-    /// Substract rounded `edit_speed` value to current edit value
-    fn edit_field_sub(&self, speed: f32) {
-        let to_sub = match self.edit_field.load(Ordering::Relaxed) {
-            EditField::Hours => 60 * 60 * speed as u32,
-            EditField::Minutes => 60 * speed as u32,
-            EditField::Seconds => speed as u32,
-        };
-
-        let mut counter = self.countdown_selected.load(Ordering::Acquire);
-        if counter > to_sub {
-            counter -= to_sub;
-        } else {
-            counter = 0;
-        }
-        self.countdown_selected.store(counter, Ordering::Release);
-    }
-
-    /// Switch to next edit field
-    fn edit_field_next(&self) {
-        let new_field = match self.edit_field.load(Ordering::Acquire) {
-            EditField::Hours => EditField::Minutes,
-            EditField::Minutes => EditField::Seconds,
-            EditField::Seconds => EditField::Hours,
-        };
-
-        self.edit_field.store(new_field, Ordering::Release);
-    }
-
-    /// Switch to previous edit field
-    fn edit_field_prev(&self) {
-        let new_field = match self.edit_field.load(Ordering::Acquire) {
-            EditField::Hours => EditField::Seconds,
-            EditField::Minutes => EditField::Hours,
-            EditField::Seconds => EditField::Minutes,
-        };
-
-        self.edit_field.store(new_field, Ordering::Release);
     }
 }
 
