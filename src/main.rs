@@ -33,6 +33,9 @@ mod countdowntimer;
 /// Buzzer to make sounds
 mod buzzer;
 
+/// Control changing speed of digits
+mod speedchanger;
+
 mod app_state;
 
 use panic_halt as _;

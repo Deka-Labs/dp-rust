@@ -9,11 +9,13 @@ use heapless::String;
 
 use crate::app::CountdownTimer;
 use crate::joystick::Joystick;
+use crate::speedchanger::SpeedChanger;
 
 use super::navigation::NavigationIcons;
 use super::{AppSharedState, AppStateTrait};
 
 const SPEED_STEPS: u32 = 8;
+const ACCELERAION_TICKS: u32 = 10;
 const MAX_TIMER_COUNTDOWN: u32 = 60 * 60 * 99 + 60 * 59 + 59; // 99 hours, 59 mins, 59 secs
 
 #[atomic_enum]
@@ -41,7 +43,8 @@ pub struct TimerState {
 
     countdown_selected: AtomicU32,
     edit_field: AtomicEditField,
-    edit_speed: AtomicU32,
+    edit_speed: SpeedChanger<SPEED_STEPS>,
+    edit_acceleration: SpeedChanger<ACCELERAION_TICKS>,
 }
 
 impl TimerState {
@@ -59,7 +62,8 @@ impl TimerState {
             internal_state: AtomicTimerInternalState::new(start_int_state),
             countdown_selected: AtomicU32::new(0),
             edit_field: AtomicEditField::new(EditField::Seconds),
-            edit_speed: AtomicU32::new(SPEED_STEPS),
+            edit_speed: Default::default(),
+            edit_acceleration: Default::default(),
         }
     }
 
@@ -90,8 +94,7 @@ impl TimerState {
     }
 
     pub fn handle_input_edit<J: Joystick>(&self, j: &J) {
-        const HOLD_DURATION_TICK: u32 = 10;
-        const MAX_SPEED: f32 = 5.0;
+        const HOLD_DURATION_TICK: u32 = 2;
 
         if j.position().is_none() {
             return;
@@ -124,27 +127,27 @@ impl TimerState {
         if j.hold_time() > HOLD_DURATION_TICK {
             let pos = j.position().as_ref().unwrap();
 
-            let speed_raw = self.edit_speed.load(Ordering::Acquire);
-            let speed: f32 = speed_raw as f32 / SPEED_STEPS as f32;
-
             use crate::joystick::JoystickButton::*;
-            match pos {
-                // Up pressed
-                Up => {
-                    self.edit_field_add(speed);
+            self.edit_speed.execute(|| {
+                match pos {
+                    // Up pressed
+                    Up => {
+                        self.edit_field_add(1.0);
+                    }
+                    // Down pressed
+                    Down => {
+                        self.edit_field_sub(1.0);
+                    }
+                    _ => {}
                 }
-                // Down pressed
-                Down => {
-                    self.edit_field_sub(speed);
-                }
-                _ => {}
-            }
+            });
 
-            if speed < MAX_SPEED {
-                self.edit_speed.store(speed_raw + 1, Ordering::Release);
-            }
+            self.edit_acceleration.execute(|| {
+                self.edit_speed.decrement_max_div();
+            });
         } else {
-            self.edit_speed.store(SPEED_STEPS, Ordering::Relaxed);
+            self.edit_speed.reset();
+            self.edit_acceleration.reset();
         }
     }
 

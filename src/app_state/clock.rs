@@ -1,6 +1,6 @@
 use core::cell::Cell;
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use atomic_enum::atomic_enum;
 use chrono::{prelude::*, Duration};
@@ -12,11 +12,12 @@ use embedded_graphics::{
 };
 use heapless::String;
 
-use crate::{ds3231::DS3231, i2c::I2c1Handle, joystick::Joystick};
+use crate::{ds3231::DS3231, i2c::I2c1Handle, joystick::Joystick, speedchanger::SpeedChanger};
 
 use super::{navigation::NavigationIcons, AppSharedState, AppStateTrait};
 
 const SPEED_STEPS: u32 = 8;
+const ACCELERAION_TICKS: u32 = 10;
 
 #[atomic_enum]
 enum EditField {
@@ -32,7 +33,8 @@ pub struct ClockState {
 
     edit_mode: AtomicBool,
     edit_field: AtomicEditField,
-    edit_speed: AtomicU32,
+    edit_speed: SpeedChanger<SPEED_STEPS>,
+    edit_acceleration: SpeedChanger<ACCELERAION_TICKS>,
 }
 
 impl ClockState {
@@ -44,7 +46,8 @@ impl ClockState {
 
             edit_mode: AtomicBool::new(false),
             edit_field: AtomicEditField::new(EditField::Hours),
-            edit_speed: AtomicU32::new(SPEED_STEPS),
+            edit_speed: Default::default(),
+            edit_acceleration: Default::default(),
         }
     }
 
@@ -81,7 +84,6 @@ impl ClockState {
     /// In edit mode navigation unavaiable
     fn handle_input_edit_mode<J: Joystick>(&self, j: &J) {
         const HOLD_DURATION_TICK: u32 = 10;
-        const MAX_SPEED: f32 = 5.0;
 
         if j.position().is_none() {
             return;
@@ -115,27 +117,27 @@ impl ClockState {
         if j.hold_time() > HOLD_DURATION_TICK {
             let pos = j.position().as_ref().unwrap();
 
-            let speed_raw = self.edit_speed.load(Ordering::Acquire);
-            let speed: f32 = speed_raw as f32 / SPEED_STEPS as f32;
-
             use crate::joystick::JoystickButton::*;
-            match pos {
-                // Up pressed
-                Up => {
-                    self.edit_field_add(speed);
+            self.edit_speed.execute(|| {
+                match pos {
+                    // Up pressed
+                    Up => {
+                        self.edit_field_add(1.0);
+                    }
+                    // Down pressed
+                    Down => {
+                        self.edit_field_sub(1.0);
+                    }
+                    _ => {}
                 }
-                // Down pressed
-                Down => {
-                    self.edit_field_sub(speed);
-                }
-                _ => {}
-            }
+            });
 
-            if speed < MAX_SPEED {
-                self.edit_speed.store(speed_raw + 1, Ordering::Release);
-            }
+            self.edit_acceleration.execute(|| {
+                self.edit_speed.decrement_max_div();
+            });
         } else {
-            self.edit_speed.store(SPEED_STEPS, Ordering::Relaxed);
+            self.edit_speed.reset();
+            self.edit_acceleration.reset();
         }
     }
 
