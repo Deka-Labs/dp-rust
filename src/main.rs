@@ -40,7 +40,7 @@ mod app_state;
 
 use panic_halt as _;
 
-#[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4, SPI3])]
+#[rtic::app(device = crate::pac, peripherals = true, dispatchers = [USART6, SPI5, SPI4])]
 mod app {
 
     // Standart library imports
@@ -50,6 +50,7 @@ mod app {
     use cortex_m::asm::wfi;
 
     // HAL imports
+    use hal::dma::StreamsTuple;
     use hal::gpio::*;
     use hal::prelude::*;
     use hal::timer::MonoTimerUs;
@@ -59,7 +60,6 @@ mod app {
     use embedded_graphics::pixelcolor::BinaryColor;
     use embedded_graphics::prelude::*;
     use spin::lock_api::RwLock;
-    use stm32f4xx_hal::dma::StreamsTuple;
 
     // This crate exports
     use crate::app_state::prelude::*;
@@ -86,8 +86,6 @@ mod app {
     #[shared]
     struct Shared {
         app_state: RwLock<AppStateHolder>,
-        stopwatch: &'static StopwatchTimer,
-        countdown: &'static CountdownTimer,
 
         i2c: &'static I2c1HandleProtected,
     }
@@ -97,11 +95,16 @@ mod app {
         /// indicate work of plate. Used in `tick`
         led: PA5<Output>,
 
-        /// Used in `draw`
+        /// Used in [`draw`]
         display: SSD1306<'static, PA8<Output<PushPull>>, I2c1Handle>,
 
         /// Handles input
         joy: JoystickImpl,
+
+        /// Stopwatch
+        stopwatch: &'static StopwatchTimer,
+        /// Countdown
+        countdown: &'static CountdownTimer,
     }
 
     #[monotonic(binds = TIM5, default = true)]
@@ -111,7 +114,7 @@ mod app {
     ///
     /// * Configures clocks to 100 MHz
     /// * Configures PA5(User LED) for tick indication
-    /// * Creates I2C bus, display, temperature sensor, RTC
+    /// * Creates I2C bus, display, RTC
     /// * Configures joystick
     /// * Starts repeating tasks
     #[init(local = [
@@ -202,12 +205,15 @@ mod app {
         (
             Shared {
                 app_state,
-                stopwatch: stopwatch_ref,
-                countdown: countdown_ref,
-
                 i2c: i2c_bus_ref,
             },
-            Local { led, display, joy },
+            Local {
+                led,
+                display,
+                joy,
+                stopwatch: stopwatch_ref,
+                countdown: countdown_ref,
+            },
             init::Monotonics(mono),
         )
     }
@@ -280,15 +286,15 @@ mod app {
     }
 
     /// Handles stopwacth interrupts
-    #[task(binds = TIM2, shared = [&stopwatch], priority = 5)]
+    #[task(binds = TIM2, local = [stopwatch], priority = 5)]
     fn tim_stopwatch_it(ctx: tim_stopwatch_it::Context) {
-        ctx.shared.stopwatch.increment();
+        ctx.local.stopwatch.increment();
     }
 
     /// Handles stopwacth interrupts
-    #[task(binds = TIM4, shared = [&countdown], priority = 5)]
+    #[task(binds = TIM4, local = [countdown], priority = 5)]
     fn tim_countdown_it(ctx: tim_countdown_it::Context) {
-        ctx.shared.countdown.handle_it();
+        ctx.local.countdown.handle_it();
     }
 
     #[task(binds = DMA1_STREAM1, shared = [&i2c], priority = 7)]
