@@ -37,8 +37,7 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
     }
 
     pub fn update_time(&self) -> Result<DateTime<Utc>, Error> {
-        let res = nb::block!(self.read_registers());
-        let data = res.unwrap();
+        let data = nb::block!(self.read_registers())?;
 
         let mut time: DateTime<Utc> = Default::default();
 
@@ -61,9 +60,9 @@ impl<I2C: BlockingI2C> DS3231<I2C> {
         // Store in 24H format
         data[Register::Hours as usize] = decimal_to_bcd(time.hour() as u8);
 
-        let res = nb::block!(self.write_registers(&data));
+        nb::block!(self.write_registers(&data))?;
 
-        res
+        Ok(())
     }
 
     fn read_registers(&self) -> nb::Result<[u8; REGISTER_COUNT], Error> {
