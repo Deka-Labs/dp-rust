@@ -82,7 +82,7 @@ impl Drawable for StopwatchState {
     where
         D: DrawTarget<Color = Self::Color>,
     {
-        self.draw_header(target, "СЕКУНДОМЕТР")?;
+        self.draw_header(target, "СЕКУНДОМЕР")?;
         self.draw_navigation(target)?;
 
         // Draw UI help
