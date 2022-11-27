@@ -288,7 +288,7 @@ mod app {
     /// Handles stopwacth interrupts
     #[task(binds = TIM2, local = [stopwatch], priority = 5)]
     fn tim_stopwatch_it(ctx: tim_stopwatch_it::Context) {
-        ctx.local.stopwatch.increment();
+        ctx.local.stopwatch.handle_it();
     }
 
     /// Handles stopwacth interrupts

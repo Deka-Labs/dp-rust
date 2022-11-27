@@ -68,7 +68,7 @@ impl<TIM: Instance> StopwatchTimer<TIM> {
     }
 
     #[inline]
-    pub fn increment(&self) {
+    pub fn handle_it(&self) {
         self.timer.borrow_mut().clear_interrupt(Event::Update);
         if self.started() {
             self.elapsed.fetch_add(TIMER_MS_STEP, Ordering::Relaxed);

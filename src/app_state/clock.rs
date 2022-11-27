@@ -84,7 +84,7 @@ impl ClockState {
             display_time: Mutex::new(Cell::new(Default::default())),
 
             edit_mode: AtomicBool::new(false),
-            edit_field: AtomicEditField::new(EditField::Hours),
+            edit_field: AtomicEditField::new(EditField::Minutes),
             edit_speed: Default::default(),
             edit_acceleration: Default::default(),
         }
